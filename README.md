@@ -43,7 +43,7 @@ python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
 | `VLLM_ASCEND_CP_BALANCE` | 0 / 1 | 是否启用 zigzag CP balance |
 | `VLLM_ASCEND_CP_BALANCE_MIN_TOKENS` | 默认 2048 | 低于该预填充词元数不走 zigzag |
 | `VLLM_ASCEND_CP_BALANCE_REDUCE_MODE` | `allreduce`(默认) / `alltoall` | 行并行归约的 owner 无关实现；默认 allreduce 更稳，alltoall 用于性能 A/B |
-| `VLLM_ASCEND_CP_BALANCE_EMBED_LOCAL` | 0(默认) / 1 | 实验性的嵌入入口，默认走模型边界 shard |
+| `VLLM_ASCEND_CP_BALANCE_EMBED_LOCAL` | 0(默认) / 1 | 实验性的嵌入入口，默认走模型边界 shard |\n| `VLLM_ASCEND_CP_BALANCE_DEBUG` | 0(默认) / 1 | 打印每个 rank 的 zigzag plan，用于确认 C 真进路径 |
 
 `questions.txt` 有 20 个有意义的中文问题；脚本会给每个问题补上同样的中文长
 上下文，默认补到 8000 字符，确保超过 `MIN_TOKENS=2048`。采样固定为
@@ -56,6 +56,19 @@ python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
 | `run.sh` | 原有启动脚本，现支持上述环境变量覆盖 |
 | `compare_first_token.py` | 采集 / 比较首词元的唯一入口，纯标准库 |
 | `questions.txt` | 20 个中文问题，每行一个 |
+| `selftest_plan.py` | CPU 自测 zigzag 计划：覆盖、置换、equal-shape，不需要 NPU |
 
 如果服务已经由别的脚本拉起，可以跳过 `run.sh`，直接执行 `collect` 和
 `compare` 两条命令。
+
+## CPU 计划自测
+
+在远端 vLLM 环境里（PYTHONPATH 指向 vllm-ascend）执行：
+
+```bash
+python selftest_plan.py --cp-size 16 --cases 2000
+```
+
+判据：末行 `SELFTEST PLAN OK`。
+
+
