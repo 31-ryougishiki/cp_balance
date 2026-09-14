@@ -1,0 +1,29 @@
+{
+  "name": "matrix_b_vs_base",
+  "configs": [
+    "glm52_cur_cp0",
+    "glm52_base_cp0",
+    "glm52_base_cp0_repeat"
+  ],
+  "static_check": {
+    "repo": "/opt/its/z30055003/vllm-ascend",
+    "base_repo": "/opt/its/z30055003/vllm-ascend-base"
+  },
+  "compare": [
+    {
+      "label": "b_vs_base",
+      "left": "glm52_cur_cp0",
+      "right": "glm52_base_cp0",
+      "require_text": true,
+      "gate": true
+    },
+    {
+      "label": "noise_floor",
+      "left": "glm52_base_cp0",
+      "right": "glm52_base_cp0_repeat",
+      "require_text": true,
+      "gate": true
+    }
+  ],
+  "ready_timeout": 1800
+}

@@ -1,0 +1,7 @@
+{
+  "extends": "_common.json",
+  "name": "default",
+  "port": 8034,
+  "cp_balance": 1,
+  "debug": 0
+}

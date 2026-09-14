@@ -1,0 +1,17 @@
+{
+  "name": "matrix_c_accept",
+  "configs": [
+    "glm52_cur_cp1",
+    "glm52_cur_cp0"
+  ],
+  "compare": [
+    {
+      "label": "c_vs_b",
+      "left": "glm52_cur_cp1",
+      "right": "glm52_cur_cp0",
+      "require_text": false,
+      "gate": true
+    }
+  ],
+  "ready_timeout": 1800
+}

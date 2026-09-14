@@ -3,6 +3,48 @@
 用 20 组中文文章 + 问题长 prompt，分别请求 `VLLM_ASCEND_CP_BALANCE=1` 和
 `=0` 的服务，比较第一个生成词元。
 
+## 配置化：每次测试 = `configs/` 下一条 JSON
+
+启动脚本只负责读 JSON：
+
+```bash
+bash run.sh configs/glm52_cur_cp0.json      # 也可以只写名字
+bash run.sh glm52_cur_cp0 --dry-run --print-env   # 只打印命令与环境
+```
+
+一条配置覆盖所有会变的参数：
+
+| 字段 | 作用 |
+| --- | --- |
+| `repo` | 代码树（决定跑哪个分支/版本） |
+| `model` / `served_model_name` | 权重路径 / 对外模型名 |
+| `host` / `port` / `local_ip` / `nic_name` | 监听地址、端口、HCCL 网卡与 IP |
+| `devices` / `tp_size` | 可见卡 / TP 并行度 |
+| `cp_balance` / `min_tokens` / `reduce_mode` / `debug` | cp_balance 四个开关 |
+| `deterministic` | 打开 4 个确定性环境变量（LCCL/HCCL/ATB 两项） |
+| `additional_config` / `server_args` / `env` | 其余 serve 参数与环境变量 |
+| `vllm_bin` | 启动命令，默认 `vllm`；可写 `[python3, -m, vllm.entrypoints.cli.main]` |
+| `extends` | 继承另一个配置（dict 合并、list 覆盖），公共部分放 `_common.json` |
+
+新加一个测试：复制一份 JSON，改 `name` 与需要变的字段即可（换模型改 `model`，
+换机器改 `local_ip`/`nic_name`/`devices`/`port`，换并行度改 `tp_size`）。
+
+矩阵（一次跑多组并给裁定）同样是 JSON：
+
+```bash
+bash run_matrix.sh configs/matrix_b_vs_base.json      # B==base + 噪声地板
+bash run_matrix.sh configs/matrix_c_accept.json       # C 验收（首 token）
+```
+
+`configs` 字段列出要跑的配置，`compare` 列出对比项：`left`/`right` 用配置的 `name`，
+`require_text` 决定是否把前 120 字符文本作为硬判据，`gate=true` 的项失败则整体 FAIL。
+
+当前已有配置：
+
+- `_common.json`：A3 / GLM-5.2-W4A8C8 / TP16 / eth2 的公共参数；
+- `glm52_cur_cp0.json`（8034）、`glm52_cur_cp1.json`（8035）：当前分支 B/C；
+- `glm52_base_cp0.json`（8036）、`glm52_base_cp0_repeat.json`（8037）：base 两次（噪声地板）；
+- `matrix_b_vs_base.json` / `matrix_c_accept.json`：两套矩阵。
 ## 数据
 
 `questions.json` 是唯一数据源，共 40 条，每条包含 `id`、`kind`、`article`、
@@ -38,11 +80,8 @@ latin-1 形式，也会回退到 latin-1 解码。
 ## 流程（先短后长）
 
 ```bash
-#  起 CP_BALANCE=1 的服务
-VLLM_ASCEND_CP_BALANCE=1 \
-VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
-VLLM_ASCEND_CP_BALANCE_DEBUG=1 \
-bash run.sh eth2 8034
+#  起 CP_BALANCE=1 的服务（参数见 configs/glm52_cur_cp1.json）
+bash run.sh glm52_cur_cp1
 
 #  先只发前 20 条短请求（<1000 字符）
 python compare_first_token.py collect \
@@ -50,10 +89,8 @@ python compare_first_token.py collect \
     --kind short \
     --out /tmp/cp_on_short.json
 
-#  停服务，起 CP_BALANCE=0 的服务
-VLLM_ASCEND_CP_BALANCE=0 \
-VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=reducescatter \
-bash run.sh eth2 8035
+#  停服务，起 CP_BALANCE=0 的服务（configs/glm52_cur_cp0.json）
+bash run.sh glm52_cur_cp0
 
 python compare_first_token.py collect \
     --url http://127.0.0.1:8035 \
@@ -92,14 +129,13 @@ python compare_first_token.py collect --url http://127.0.0.1:8035 --kind long --
 
 ## 分支证明（走 C 还是 B）
 
-`run.sh` 默认 `VLLM_ASCEND_CP_BALANCE=1`，但每个 batch 是否真的走 zigzag 由
+`configs/glm52_cur_cp1.json` 里 `cp_balance=1`，但每个 batch 是否真的走 zigzag 由
 metadata builder 逐 batch 判定。打开 `VLLM_ASCEND_CP_BALANCE_DEBUG=1` 后，
 SFA metadata builder 会为**两条分支**各打一行 `[CP_BALANCE][branch]`（每 rank
 每 batch 一次），所以“走哪条分支”由日志行本身回答，而不是靠“没有日志”推断。
 
 ```bash
-VLLM_ASCEND_CP_BALANCE=1 VLLM_ASCEND_CP_BALANCE_DEBUG=1 PYTHONUNBUFFERED=1 \
-    bash run.sh eth2 8034 > /tmp/cp_on.log 2>&1
+bash run.sh glm52_cur_cp1 > /tmp/cp_on.log 2>&1
 # 另一个终端
 python check_branch.py --url http://127.0.0.1:8034 --log /tmp/cp_on.log
 ```
@@ -161,20 +197,15 @@ bash run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确
 
 ### 步骤 1-手动：分步等价命令
 
-`run.sh` 的代码树由 `VLLM_ASCEND_REPO` 决定（默认当前分支目录）。起 base
-分支时必须覆盖它，否则加载的仍是当前分支代码：
+代码树与开关全部写在配置里（`repo` 字段），不需要命令行覆盖：
 
 ```bash
-# 当前分支：CP_BALANCE=0，且不设 REDUCE_MODE（验证"默认即一致"）
-VLLM_ASCEND_CP_BALANCE=0 VLLM_ASCEND_CP_BALANCE_DEBUG=1 PYTHONUNBUFFERED=1 \
-    VLLM_ASCEND_REPO=/opt/its/z30055003/vllm-ascend \
-    bash run.sh eth2 8034 > /tmp/cur_off.log 2>&1
+# 当前分支 CP_BALANCE=0（configs/glm52_cur_cp0.json，端口 8034）
+bash run.sh glm52_cur_cp0 > /tmp/cur_off.log 2>&1
 python compare_first_token.py collect --url http://127.0.0.1:8034 --out /tmp/cur_off.json
-# 停服务，换 base 代码树（同一个 run.sh）
-VLLM_ASCEND_CP_BALANCE=0 PYTHONUNBUFFERED=1 \
-    VLLM_ASCEND_REPO=/opt/its/z30055003/vllm-ascend-base \
-    bash run.sh eth2 8035 > /tmp/base_off.log 2>&1
-python compare_first_token.py collect --url http://127.0.0.1:8035 --out /tmp/base_off.json
+# 停服务，换 base 代码树（configs/glm52_base_cp0.json，端口 8036）
+bash run.sh glm52_base_cp0 > /tmp/base_off.log 2>&1
+python compare_first_token.py collect --url http://127.0.0.1:8036 --out /tmp/base_off.json
 python compare_first_token.py compare --require-text /tmp/cur_off.json /tmp/base_off.json
 ```
 
@@ -234,10 +265,13 @@ python selftest_plan.py --cp-size 16 --cases 2000
 
 | 文件 | 作用 |
 | --- | --- |
-| `run.sh` | 启动脚本，支持 `VLLM_ASCEND_CP_BALANCE`、`..._REDUCE_MODE`、`..._DEBUG` 覆盖 |
+| `run.sh` | 启动入口：读 `configs/*.json`，交给 `serve_config.py` |
+| `serve_config.py` | 配置加载/继承/覆盖 → 环境变量 + `vllm serve` 参数 |
+| `configs/` | 每条测试一份 JSON（模型/ip/port/nic/tp/开关），含矩阵配置 |
+| `run_matrix.py` | 按矩阵 JSON 串行起停服务、采集、对比、给裁定 |
 | `questions.json` | 20 组 article + question + prompt |
 | `compare_first_token.py` | collect / compare 首词元 |
 | `check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
 | `check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
-| `run_matrix.sh` | 一条命令跑完 cur_off / cur_on / base_off / base_off2 四组并给出裁定 |
+| `run_matrix.sh` | `run_matrix.py` 的入口包装 |
 | `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
