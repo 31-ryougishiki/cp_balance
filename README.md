@@ -1,69 +1,71 @@
 ﻿# cp_balance 首词元对比
 
-这个目录只做一件事：用同一组足够长的中文问题，分别请求
-`VLLM_ASCEND_CP_BALANCE=1` 和 `=0` 的 vLLM 服务，比较第一个生成词元是否相同。
+用 20 组中文文章 + 问题长 prompt，分别请求 `VLLM_ASCEND_CP_BALANCE=1` 和
+`=0` 的服务，比较第一个生成词元。
 
-## 一次性流程
+## 数据
 
-在远端机器上按下面的顺序执行。每次只拉起一个服务，避免两张服务争抢同一批
-NPU；`run.sh` 已经支持环境变量覆盖。
+`questions.json` 由 `build_questions.py` 生成，共 20 条，每条包含：
+
+- `id`：编号；
+- `article`：共享中文长文章；
+- `question`：问题；
+- `prompt`：`article + 换行 + "问题：" + question`，可直接发送。
+
+请求方式与现场模板一致：
 
 ```bash
-cd <本目录>
+curl http://<node0_ip>:<port>/v1/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "glm-52",
+        "prompt": "<questions.json 里的 prompt>",
+        "max_completion_tokens": 50,
+        "temperature": 0
+    }'
+```
 
-#  拉起 cp_balance 开启的服务
-VLLM_ASCEND_CP_BALANCE=1 VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
-    bash run.sh eth2 8034
-# 另一个终端执行采集
+`compare_first_token.py` 会额外请求 1 个 logprob，用于精确取出第一个生成词元。
+
+## 流程
+
+```bash
+#  起 CP_BALANCE=1 的服务，并打开 debug 确认进入 zigzag
+VLLM_ASCEND_CP_BALANCE=1 \
+VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
+VLLM_ASCEND_CP_BALANCE_DEBUG=1 \
+bash run.sh eth2 8034
+
+#  采集 20 个首词元
 python compare_first_token.py collect \
     --url http://127.0.0.1:8034 \
     --out /tmp/cp_on.json
 
-#  停掉 ，拉起 cp_balance 关闭的服务
-VLLM_ASCEND_CP_BALANCE=0 VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
-    bash run.sh eth2 8035
+#  停服务，起 CP_BALANCE=0 的服务
+VLLM_ASCEND_CP_BALANCE=0 \
+VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
+bash run.sh eth2 8035
+
 python compare_first_token.py collect \
     --url http://127.0.0.1:8035 \
     --out /tmp/cp_off.json
 
-#  比较首词元
+#  比较
 python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
 ```
 
 判据：
 
-- 每个案例打印 `token=...`；
-- 末行 `[compare] RESULT: PASS`，并且 `first-token match: 20/20`；
-- 若出现 `DIFF`，把屏幕输出和两个 JSON 一起贴回来。
+```text
+[compare] first-token match: 20/20
+[compare] RESULT: PASS
+```
 
-## 模式说明
+失败时把两个 JSON 和 `VLLM_ASCEND_CP_BALANCE_DEBUG=1` 的 server 日志一起回传。
 
-| env | 取值 | 说明 |
-| --- | --- | --- |
-| `VLLM_ASCEND_CP_BALANCE` | 0 / 1 | 是否启用 zigzag CP balance |
-| `VLLM_ASCEND_CP_BALANCE_MIN_TOKENS` | 默认 2048 | 低于该预填充词元数不走 zigzag |
-| `VLLM_ASCEND_CP_BALANCE_REDUCE_MODE` | `allreduce`(默认) / `alltoall` | 行并行归约的 owner 无关实现；默认 allreduce 更稳，alltoall 用于性能 A/B |
-| `VLLM_ASCEND_CP_BALANCE_EMBED_LOCAL` | 0(默认) / 1 | 实验性的嵌入入口，默认走模型边界 shard |\n| `VLLM_ASCEND_CP_BALANCE_DEBUG` | 0(默认) / 1 | 打印每个 rank 的 zigzag plan，用于确认 C 真进路径 |
+## plan 自测
 
-`questions.txt` 有 20 个有意义的中文问题；脚本会给每个问题补上同样的中文长
-上下文，默认补到 8000 字符，确保超过 `MIN_TOKENS=2048`。采样固定为
-`temperature=0, max_tokens=1`，所以首词元是实现的确定性函数。
-
-## 文件
-
-| 文件 | 作用 |
-| --- | --- |
-| `run.sh` | 原有启动脚本，现支持上述环境变量覆盖 |
-| `compare_first_token.py` | 采集 / 比较首词元的唯一入口，纯标准库 |
-| `questions.txt` | 20 个中文问题，每行一个 |
-| `selftest_plan.py` | CPU 自测 zigzag 计划：覆盖、置换、equal-shape，不需要 NPU |
-
-如果服务已经由别的脚本拉起，可以跳过 `run.sh`，直接执行 `collect` 和
-`compare` 两条命令。
-
-## CPU 计划自测
-
-在远端 vLLM 环境里（PYTHONPATH 指向 vllm-ascend）执行：
+在远端 vLLM 环境执行，不需要 NPU：
 
 ```bash
 python selftest_plan.py --cp-size 16 --cases 2000
@@ -71,4 +73,12 @@ python selftest_plan.py --cp-size 16 --cases 2000
 
 判据：末行 `SELFTEST PLAN OK`。
 
+## 文件
 
+| 文件 | 作用 |
+| --- | --- |
+| `run.sh` | 启动脚本，支持 `VLLM_ASCEND_CP_BALANCE`、`..._REDUCE_MODE`、`..._DEBUG` 覆盖 |
+| `questions.json` | 20 组 article + question + prompt |
+| `build_questions.py` | 生成 `questions.json` |
+| `compare_first_token.py` | collect / compare 首词元 |
+| `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
