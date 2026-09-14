@@ -290,7 +290,7 @@ def _compare(args: argparse.Namespace) -> int:
         return 1
 
     require_text = bool(getattr(args, "require_text", False))
-    passed = 0
+    token_ok = 0
     head_ok = 0
     by_kind: dict[str, list[int]] = {}
     mismatches: list[str] = []
@@ -301,31 +301,36 @@ def _compare(args: argparse.Namespace) -> int:
         if same_token and item_a.get("first_token_id") is not None:
             same_token = item_a.get("first_token_id") == item_b.get("first_token_id")
         same_head = item_a.get("text_head") == item_b.get("text_head")
+        token_ok += int(same_token and same_prompt)
         head_ok += int(same_head)
         stats = by_kind.setdefault(kind, [0, 0])
         stats[1] += 1
-        if same_prompt and same_token and (same_head or not require_text):
-            passed += 1
-            stats[0] += 1
-            print(
-                f"[{item_a.get('index', 0):02d}][{kind}] OK  token={item_a.get('first_token')!r}"
-                + ("" if same_head else "  text_head=DIFF")
-            )
+        stats[0] += int(same_token and same_prompt)
+        if not same_token:
+            criterion = "first-token"
+        elif not same_head:
+            criterion = "text_head"
         else:
-            reason = "text_head" if (same_token and not same_head) else "token"
-            mismatches.append(
-                f"case {item_a.get('index')}[{kind}]: prompt_same={same_prompt} "
-                f"diff={reason} "
-                f"A={item_a.get('first_token')!r} B={item_b.get('first_token')!r}"
-            )
+            criterion = "prompt"
+        failed = not same_prompt or not same_token or (require_text and not same_head)
+        if not failed:
+            note = "" if same_head else "  text_head=DIFF"
             print(
-                f"[{item_a.get('index', 0):02d}][{kind}] DIFF token {item_a.get('first_token')!r} != "
-                f"{item_b.get('first_token')!r}, prompt_same={same_prompt}, text_head_same={same_head}"
+                f"[{item_a.get('index', 0):02d}][{kind}] OK  token={item_a.get('first_token')!r}{note}"
             )
-    print(f"[compare] first-token match: {passed}/{len(a)}")
-    print(f"[compare] text_head match: {head_ok}/{len(a)}")
-    if require_text and head_ok != len(a):
-        mismatches.append(f"text_head mismatch on {len(a) - head_ok}/{len(a)} cases")
+            continue
+        mismatches.append(
+            f"case {item_a.get('index')}[{kind}]: {criterion} "
+            f"A={item_a.get('first_token')!r} B={item_b.get('first_token')!r}"
+        )
+        print(
+            f"[{item_a.get('index', 0):02d}][{kind}] DIFF {criterion} "
+            f"A={item_a.get('first_token')!r} B={item_b.get('first_token')!r} "
+            f"prompt_same={same_prompt}"
+        )
+    print(f"[compare] first-token match: {token_ok}/{len(a)}")
+    print(f"[compare] text_head match: {head_ok}/{len(a)} (hard only with --require-text)")
+    print(f"[compare] require-text: {require_text}")
     for kind, (ok, total) in sorted(by_kind.items()):
         print(f"[compare] {kind}: {ok}/{total}")
     if mismatches:

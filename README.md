@@ -169,6 +169,25 @@ grep -c "branch=CONTINUOUS" /tmp/cur_off.log                            # > 0
 grep -m1 "\[cp_balance\] REPO=" /tmp/cur_off.log                       # 确认代码树
 ```
 
+失败时先做（先分清"测量问题"还是"代码差异"）：
+
+```bash
+# 1) 两次服务到底加载了哪个代码树 / 开了什么
+grep -m1 "\[cp_balance\]" /tmp/cur_off.log /tmp/base_off.log
+# 2) 运行期用了哪种归约（CP=0 必须是 path=native，不能出现 path=fixed_order）
+grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" /tmp/cur_off.log
+# 3) 两份 JSON 是不是本轮采集的
+python -c "import json;[print(f, json.load(open(f))[\"url\"], json.load(open(f))[\"created_at\"]) for f in (\"cur_off.json\", \"base_off.json\")]"
+```
+
+判读：
+
+- 两行的 `REPO=`/`HEAD=` 相同（或 base 那次仍是当前分支 HEAD）→ 代码树没切换，结果无效；
+- `path=fixed_order` 出现在 `cur_off.log` → 跑的是改动前的代码（或误设了 `REDUCE_MODE`）；
+- 两份 JSON 的 `created_at` 相差很远 → 用的是旧数据；
+- 以上都正常而短 prompt（<2048 token，不进入 zigzag）仍不一致 → 说明还有未识别的差异，
+  先跑一次"同代码树自比对"（base vs base，或 CP=0 跑两遍）确定测量是否可复现。
+
 ### 步骤 2：C 回归（补回融合算子后必须重跑）
 
 当前分支补回了 base 的 `npu_transpose_batchmatmul`（`_q_proj_and_k_up_proj`），
