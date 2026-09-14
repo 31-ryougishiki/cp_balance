@@ -5,12 +5,8 @@
 
 ## 数据
 
-`questions.json` 由 `build_questions.py` 生成，共 20 条，每条包含：
-
-- `id`：编号；
-- `article`：共享中文长文章；
-- `question`：问题；
-- `prompt`：`article + 换行 + "问题：" + question`，可直接发送。
+`questions.json` 是唯一数据源，共 20 条，每条包含 `id`、`article`、
+`question` 和可直接发送的 `prompt`。修改或新增问题时只改这个 JSON。
 
 请求方式与现场模板一致：
 
@@ -79,6 +75,5 @@ python selftest_plan.py --cp-size 16 --cases 2000
 | --- | --- |
 | `run.sh` | 启动脚本，支持 `VLLM_ASCEND_CP_BALANCE`、`..._REDUCE_MODE`、`..._DEBUG` 覆盖 |
 | `questions.json` | 20 组 article + question + prompt |
-| `build_questions.py` | 生成 `questions.json` |
 | `compare_first_token.py` | collect / compare 首词元 |
 | `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
