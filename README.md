@@ -21,7 +21,8 @@ curl http://<node0_ip>:<port>/v1/completions \
     }'
 ```
 
-`compare_first_token.py` 会额外请求 1 个 logprob，用于精确取出第一个生成词元。
+`compare_first_token.py` 生成请求完全使用上面的模板，只替换 `prompt`；拿到
+`choices[0].text` 后再调用 vLLM `/tokenize` 取第一个可见 token，避免比较原始格式 token。
 
 ## 流程
 

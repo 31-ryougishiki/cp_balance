@@ -1,16 +1,17 @@
 ﻿#!/usr/bin/env python3
-"""Collect and compare the first generated token of long Chinese prompts.
+"""Collect and compare the first output token of long Chinese prompts.
 
-The questions live in ``questions.json`` (article + question + full prompt).
-Requests follow the service template used for GLM-5.2::
+Generation requests follow the GLM-5.2 service template exactly::
 
     POST /v1/completions
     {"model": "glm-52", "prompt": "...", "max_completion_tokens": 50,
      "temperature": 0}
 
-The script additionally asks for one logprob so the first sampled token can be
-extracted exactly instead of comparing characters.  It only uses the standard
-library.
+Only the ``prompt`` content changes between cases.  After generation we call the
+vLLM ``/tokenize`` endpoint on ``choices[0].text`` to recover the first visible
+token string; if that endpoint is unavailable the script falls back to the first
+visible character.  This keeps the generation request clean while avoiding raw
+special/format tokens in the comparison.
 
 Usage::
 
@@ -25,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -65,31 +67,58 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float) -> dict[str, A
     return json.loads(body)
 
 
-def _first_token(choice: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
-    """Extract the first sampled token from a completions/chat response."""
-    logprobs = choice.get("logprobs")
-    if isinstance(logprobs, dict):
-        content = logprobs.get("content")
-        if isinstance(content, list) and content:
-            first = content[0] or {}
-            return first.get("token"), list(first.get("top_logprobs") or [])
-        tokens = logprobs.get("tokens")
-        if isinstance(tokens, list) and tokens:
-            top_raw = logprobs.get("top_logprobs") or []
-            top: list[dict[str, Any]] = []
-            if isinstance(top_raw, list) and top_raw and isinstance(top_raw[0], dict):
-                top = [{"token": key, "logprob": value} for key, value in top_raw[0].items()]
-            return tokens[0], top
+def _visible_first_unit(text: str) -> str | None:
+    """First visible word/character, used when /tokenize is unavailable."""
+    text = text.lstrip()
+    if not text:
+        return None
+    match = re.match(r"[A-Za-z0-9]+", text)
+    if match:
+        return match.group(0)
+    return text[0]
 
-    text = choice.get("text")
-    if isinstance(text, str) and text:
-        return text[:1], []
-    message = choice.get("message") or {}
-    if isinstance(message, dict):
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            return content[:1], []
-    return None, []
+
+def _resolve_first_token(
+    base_url: str,
+    model: str,
+    text: str,
+    timeout: float,
+) -> tuple[str | int | None, int | None, str]:
+    """Return (first_token, first_token_id, source).
+
+    ``choices[0].text`` may omit raw special/format tokens.  Tokenizing it again
+    gives the first visible token of the generated answer, which is the signal
+    we want to compare.
+    """
+    text = text or ""
+    if not text.strip():
+        return None, None, "empty"
+    try:
+        response = _post_json(
+            base_url.rstrip("/") + "/tokenize",
+            {
+                "model": model,
+                "prompt": text,
+                "add_special_tokens": False,
+                "return_token_strs": True,
+            },
+            timeout,
+        )
+        token_ids = response.get("tokens")
+        token_strs = response.get("token_strs")
+        token = None
+        token_id = None
+        if isinstance(token_strs, list) and token_strs:
+            token = token_strs[0]
+        if isinstance(token_ids, list) and token_ids:
+            token_id = int(token_ids[0])
+            if token is None:
+                token = token_id
+        if token is not None:
+            return token, token_id, "tokenize"
+    except Exception:  # noqa: BLE001 - fall back to text prefix
+        pass
+    return _visible_first_unit(text), None, "text"
 
 
 def _collect(args: argparse.Namespace) -> int:
@@ -106,12 +135,13 @@ def _collect(args: argparse.Namespace) -> int:
     for index, item in enumerate(cases):
         question = str(item.get("question") or item.get("q") or "")
         prompt = _prompt_of(item)
+        # Keep this payload exactly equal to the service template; only prompt
+        # content changes per case.
         payload: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "max_completion_tokens": args.max_completion_tokens,
             "temperature": args.temperature,
-            "logprobs": args.top_logprobs,
         }
         started = time.time()
         try:
@@ -119,7 +149,7 @@ def _collect(args: argparse.Namespace) -> int:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             if exc.code == 400 and "max_completion_tokens" in payload:
-                # Older/vLLM-compatible servers may still expose only max_tokens.
+                # vLLM-compatible servers that only understand max_tokens.
                 payload.pop("max_completion_tokens")
                 payload["max_tokens"] = args.max_completion_tokens
                 try:
@@ -140,8 +170,10 @@ def _collect(args: argparse.Namespace) -> int:
             print(f"[{index:02d}] response has no choices", file=sys.stderr)
             return 2
         choice = choices[0]
-        token, top = _first_token(choice)
         text = choice.get("text") or ""
+        token, token_id, token_source = _resolve_first_token(
+            args.url, model, text, args.timeout
+        )
         elapsed = time.time() - started
         prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
         results.append(
@@ -152,12 +184,16 @@ def _collect(args: argparse.Namespace) -> int:
                 "prompt_sha256": prompt_sha,
                 "prompt_chars": len(prompt),
                 "first_token": token,
-                "text_head": text[:80],
-                "top_logprobs": top,
+                "first_token_id": token_id,
+                "first_token_source": token_source,
+                "text_head": text[:120],
                 "elapsed_s": round(elapsed, 3),
             }
         )
-        print(f"[{index:02d}] chars={len(prompt):5d} first_token={token!r} text={text[:24]!r} ({elapsed:.2f}s)")
+        print(
+            f"[{index:02d}] chars={len(prompt):5d} token={token!r} "
+            f"source={token_source} text={text[:24]!r} ({elapsed:.2f}s)"
+        )
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -195,9 +231,13 @@ def _compare(args: argparse.Namespace) -> int:
     for item_a, item_b in zip(a, b):
         same_prompt = item_a.get("prompt_sha256") == item_b.get("prompt_sha256")
         same_token = item_a.get("first_token") == item_b.get("first_token")
+        if same_token and item_a.get("first_token_id") is not None:
+            same_token = item_a.get("first_token_id") == item_b.get("first_token_id")
         if same_prompt and same_token:
             passed += 1
-            print(f"[{item_a.get('index', 0):02d}] OK  token={item_a.get('first_token')!r}")
+            print(
+                f"[{item_a.get('index', 0):02d}] OK  token={item_a.get('first_token')!r}"
+            )
         else:
             mismatches.append(
                 f"case {item_a.get('index')}: prompt_same={same_prompt} "
@@ -229,7 +269,6 @@ def _build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--endpoint", default="/v1/completions")
     collect.add_argument("--max-completion-tokens", type=int, default=50)
     collect.add_argument("--temperature", type=float, default=0.0)
-    collect.add_argument("--top-logprobs", type=int, default=1)
     collect.add_argument("--timeout", type=float, default=600.0)
     collect.set_defaults(func=_collect)
 
