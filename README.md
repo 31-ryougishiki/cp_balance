@@ -137,7 +137,29 @@ python check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
 `zigzag_active()` 门控；裸的 `VLLM_ASCEND_CP_BALANCE` 只被资格判定读取；
 `_q_proj_and_k_up_proj` 的融合算子块与 base 逐字节相同。
 
-### 步骤 1：CP_BALANCE=0 vs base（主判据）
+### 步骤 1：一条命令跑完四组实验（推荐）
+
+```bash
+bash run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确定性变量
+```
+
+串行跑四组，每组服务起停一次、采 40 条 prompt：
+
+| 组 | 代码树 | 设置 | 作用 |
+| --- | --- | --- | --- |
+| `cur_off` | 当前分支 | `CP_BALANCE=0` | 与 base 的**等价性主判据** |
+| `cur_on` | 当前分支 | `CP_BALANCE=1` | C 验收（首 token） |
+| `base_off` | base 分支 | — | 原版 DSA-CP |
+| `base_off2` | base 分支 | — | **噪声地板**（同代码树重复一次） |
+
+输出目录 `matrix_<时间戳>/`：`summary.txt`（每组指纹 + 归约计数 + 对比结论）、
+`*.log`、`*.json`、`cmp_*.txt`。裁定：`R1` 与 `R3` 同时 PASS 才打印 `RESULT: PASS`；
+`R3` FAIL 说明测量本身不可复现，先别谈代码差异。
+
+可选环境变量：`VLLM_ASCEND_REPO_CUR` / `VLLM_ASCEND_REPO_BASE` / `RUNS`
+（如 `RUNS=cur_off,base_off`）/ `OUT_DIR` / `READY_TIMEOUT`。
+
+### 步骤 1-手动：分步等价命令
 
 `run.sh` 的代码树由 `VLLM_ASCEND_REPO` 决定（默认当前分支目录）。起 base
 分支时必须覆盖它，否则加载的仍是当前分支代码：
@@ -217,4 +239,5 @@ python selftest_plan.py --cp-size 16 --cases 2000
 | `compare_first_token.py` | collect / compare 首词元 |
 | `check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
 | `check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
+| `run_matrix.sh` | 一条命令跑完 cur_off / cur_on / base_off / base_off2 四组并给出裁定 |
 | `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
