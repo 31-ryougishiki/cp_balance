@@ -28,7 +28,12 @@ curl http://<node0_ip>:<port>/v1/completions \
 
 `compare_first_token.py` 生成请求完全使用上面的模板，只替换 `prompt`；拿到
 `choices[0].text` 后再调用 vLLM `/tokenize` 取第一个可见 token，避免比较原始格式 token。
-部分 vLLM 版本返回 latin-1 形式的 token 字符串（如 `åĤæŀľ`），脚本会自动重新解码为 UTF-8。
+
+`/tokenize` 的 `return_token_strs=true` 返回的是**词表条目**而不是解码后的文本：GLM-5.2
+使用 byte-level BPE，一个中文 token 会显示成 `å¦Ĥæŀľ` 这样的字节视图（`如果` 的 UTF-8
+字节 `E5 A6 82 E6 9E 9C`）。这只是 token 字符串的表示形式，不是请求乱码，curl 手发请求
+也会有同样的现象。脚本会按 byte-level BPE 的字节表还原成 `如果`；如果某种实现改为
+latin-1 形式，也会回退到 latin-1 解码。
 
 ## 流程（先短后长）
 

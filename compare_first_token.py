@@ -78,27 +78,55 @@ def _visible_first_unit(text: str) -> str | None:
     return text[0]
 
 
-def _normalize_token_str(token: Any) -> Any:
-    """Repair latin-1-decoded UTF-8 token strings returned by /tokenize.
+def _byte_decoder() -> dict[str, int]:
+    """Return the ``unicode char -> byte`` table of byte-level BPE tokenizers.
 
-    Some vLLM builds convert byte-level BPE tokens to ``str`` with latin-1.
-    A Chinese token therefore comes back like ``åĤæŀľ`` instead of ``如果``.
-    Re-encode as latin-1 and decode as UTF-8 when that round-trip is valid;
-    otherwise keep the original token unchanged.
+    GPT-2 style tokenizers (GLM-5.2 included) store every token as a string of
+    printable unicode characters standing for the token's raw bytes, so byte
+    ``0x82`` is written ``Ĥ`` (U+0124) and ``0x9E`` is written ``ŀ`` (U+0140).
+    """
+    printable = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("\u00a1"), ord("\u00ac") + 1))
+        + list(range(ord("\u00ae"), ord("\u00ff") + 1))
+    )
+    table = {chr(byte): byte for byte in printable}
+    for offset, byte in enumerate(b for b in range(256) if b not in printable):
+        table[chr(256 + offset)] = byte
+    return table
+
+
+_BYTE_DECODER = _byte_decoder()
+
+
+def _normalize_token_str(token: Any) -> Any:
+    """Repair byte-level BPE token strings returned by /tokenize.
+
+    ``/tokenize`` with ``return_token_strs=True`` returns raw vocabulary
+    entries, not decoded text.  For byte-level BPE a Chinese token therefore
+    comes back like ``å¦Ĥæŀľ`` (the byte view of ``E5 A6 82 E6 9E 9C``) instead
+    of ``如果``.  Rebuild the underlying bytes and decode them as UTF-8; keep
+    the original token when no round-trip yields valid UTF-8.
     """
     if not isinstance(token, str) or not token:
         return token
+    candidates = []
     try:
-        raw = token.encode("latin-1")
+        candidates.append(bytes(_BYTE_DECODER[char] for char in token))
+    except KeyError:
+        pass
+    try:
+        candidates.append(token.encode("latin-1"))
     except UnicodeEncodeError:
-        return token
-    try:
-        decoded = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return token
-    if "\ufffd" in decoded:
-        return token
-    return decoded
+        pass
+    for raw in candidates:
+        try:
+            decoded = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if "\ufffd" not in decoded:
+            return decoded
+    return token
 
 
 def _resolve_first_token(
