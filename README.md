@@ -60,6 +60,14 @@ python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
 
 失败时把两个 JSON 和 `VLLM_ASCEND_CP_BALANCE_DEBUG=1` 的 server 日志一起回传。
 
+## 归约模式
+
+`VLLM_ASCEND_CP_BALANCE_REDUCE_MODE`：
+
+- `allreduce`（默认）：AllReduce 后切本 rank chunk，owner-independent；
+- `alltoall`：all_to_all_single + 固定 source-rank 求和，通信量更低；
+- `reducescatter`：恢复原始 reduce_scatter，仅用于基线对照。
+
 ## plan 自测
 
 在远端 vLLM 环境执行，不需要 NPU：
