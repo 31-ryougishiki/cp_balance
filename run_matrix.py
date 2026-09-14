@@ -90,6 +90,22 @@ def main() -> int:
     if args.only:
         keep = {item.strip() for item in args.only.split(",") if item.strip()}
         entries = [entry for entry in entries if entry in keep]
+    resolved = {entry: serve_config.load_config(entry) for entry in entries}
+    keys = {entry: str(resolved[entry].get("name") or entry) for entry in entries}
+    compares = matrix.get("compare") or []
+    plan = ["matrix=%s configs=%s" % (matrix.get("name"), ",".join(entries))]
+    for entry in entries:
+        cfg = resolved[entry]
+        plan.append("plan %-24s port=%s repo=%s CP_BALANCE=%s det=%s file=%s" % (keys[entry], cfg.get("port"), cfg.get("repo"), cfg.get("cp_balance"), bool(cfg.get("deterministic")), entry))
+    for item in compares:
+        plan.append("compare %-16s %s vs %s require_text=%s gate=%s" % (item.get("label"), item.get("left"), item.get("right"), item.get("require_text", False), item.get("gate", False)))
+
+    if args.dry_run:
+        for line in plan:
+            print("[matrix] " + line, flush=True)
+        print("[matrix] dry-run: nothing launched, no output directory created", flush=True)
+        return 0
+
     out = Path(args.out) if args.out else HERE / ("matrix_%s_%s" % (matrix.get("name", "run"), time.strftime("%m%d_%H%M")))
     out.mkdir(parents=True, exist_ok=True)
     summary = (out / "summary.txt").open("w", encoding="utf-8")
@@ -99,19 +115,9 @@ def main() -> int:
         summary.write("[matrix] " + msg + chr(10))
         summary.flush()
 
-    log("matrix=%s out=%s configs=%s" % (matrix.get("name"), out, ",".join(entries)))
-    resolved = {entry: serve_config.load_config(entry) for entry in entries}
-    keys = {entry: str(resolved[entry].get("name") or entry) for entry in entries}
-    for entry in entries:
-        cfg = resolved[entry]
-        log("plan %-24s port=%s repo=%s CP_BALANCE=%s det=%s file=%s" % (keys[entry], cfg.get("port"), cfg.get("repo"), cfg.get("cp_balance"), bool(cfg.get("deterministic")), entry))
-    compares = matrix.get("compare") or []
-    for item in compares:
-        log("compare %-16s %s vs %s require_text=%s gate=%s" % (item.get("label"), item.get("left"), item.get("right"), item.get("require_text", False), item.get("gate", False)))
-
-    if args.dry_run:
-        summary.close()
-        return 0
+    log("out=%s" % out)
+    for line in plan:
+        log(line)
 
     check = matrix.get("static_check")
     if check:
