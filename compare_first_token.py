@@ -36,19 +36,10 @@ DEFAULT_QUESTIONS = Path(__file__).with_name("questions.json")
 
 
 def _load_cases(path: Path) -> tuple[list[dict[str, Any]], str]:
-    """Return (cases, model_hint); supports questions.json and plain text."""
-    text = path.read_text(encoding="utf-8")
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if not lines:
-            raise SystemExit(f"no questions found in {path}")
-        return [{"prompt": line} for line in lines], ""
+    """Return (cases, model_hint) from questions.json."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, dict) and "items" in payload:
-        cases = list(payload["items"])
-        model_hint = str(payload.get("model") or "")
-        return cases, model_hint
+        return list(payload["items"]), str(payload.get("model") or "")
     if isinstance(payload, list):
         return list(payload), ""
     raise SystemExit(f"unsupported questions file structure: {path}")
@@ -58,11 +49,7 @@ def _prompt_of(item: dict[str, Any]) -> str:
     prompt = item.get("prompt")
     if isinstance(prompt, str) and prompt.strip():
         return prompt
-    article = item.get("article") or ""
-    question = item.get("question") or item.get("q") or ""
-    if not article or not question:
-        raise SystemExit(f"item has neither prompt nor article+question: {item!r}")
-    return f"{article}\n\n问题：{question}\n请直接给出答案。"
+    raise SystemExit(f"questions.json item is missing a non-empty prompt: {item!r}")
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
@@ -237,7 +224,7 @@ def _build_parser() -> argparse.ArgumentParser:
     collect = sub.add_parser("collect", help="send prompts and save the first token")
     collect.add_argument("--url", required=True, help="base URL, e.g. http://127.0.0.1:8034")
     collect.add_argument("--out", required=True, help="output JSON path")
-    collect.add_argument("--questions", default=str(DEFAULT_QUESTIONS), help="questions.json or legacy text file")
+    collect.add_argument("--questions", default=str(DEFAULT_QUESTIONS), help="questions.json")
     collect.add_argument("--model", default="", help="served model name (default: questions.json hint)")
     collect.add_argument("--endpoint", default="/v1/completions")
     collect.add_argument("--max-completion-tokens", type=int, default=50)
