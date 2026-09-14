@@ -29,32 +29,42 @@ curl http://<node0_ip>:<port>/v1/completions \
 `compare_first_token.py` 生成请求完全使用上面的模板，只替换 `prompt`；拿到
 `choices[0].text` 后再调用 vLLM `/tokenize` 取第一个可见 token，避免比较原始格式 token。
 
-## 流程
+## 流程（先短后长）
 
 ```bash
-#  起 CP_BALANCE=1 的服务，并打开 debug 确认进入 zigzag
+#  起 CP_BALANCE=1 的服务
 VLLM_ASCEND_CP_BALANCE=1 \
 VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
 VLLM_ASCEND_CP_BALANCE_DEBUG=1 \
 bash run.sh eth2 8034
 
-#  采集 20 个首词元
+#  先只发前 20 条短请求（<1000 字符）
 python compare_first_token.py collect \
     --url http://127.0.0.1:8034 \
-    --out /tmp/cp_on.json
+    --kind short \
+    --out /tmp/cp_on_short.json
 
 #  停服务，起 CP_BALANCE=0 的服务
 VLLM_ASCEND_CP_BALANCE=0 \
-VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce \
+VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=reducescatter \
 bash run.sh eth2 8035
 
 python compare_first_token.py collect \
     --url http://127.0.0.1:8035 \
-    --out /tmp/cp_off.json
+    --kind short \
+    --out /tmp/cp_off_short.json
 
-#  比较
-python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
+python compare_first_token.py compare /tmp/cp_on_short.json /tmp/cp_off_short.json
+
+#  短请求通过后，再跑长请求
+python compare_first_token.py collect --url http://127.0.0.1:8035 --kind long --out /tmp/cp_off_long.json
+# 重新起 CP_BALANCE=1 服务，再用 --kind long 采集 /tmp/cp_on_long.json
+# python compare_first_token.py compare /tmp/cp_on_long.json /tmp/cp_off_long.json
 ```
+
+短请求不会触发 `MIN_TOKENS=2048`，因此它们主要验证关闭/开启路径的基础行为；
+短请求通过后再跑长请求，长请求才会真正进入 CP_BALANCE 和 owner-independent
+归约。
 
 判据：
 
@@ -63,7 +73,8 @@ python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
 [compare] RESULT: PASS
 ```
 
-失败时把两个 JSON 和 `VLLM_ASCEND_CP_BALANCE_DEBUG=1` 的 server 日志一起回传。
+失败时把对应 kind 的两个 JSON 和带 `VLLM_ASCEND_CP_BALANCE_DEBUG=1` 的 server log
+一起回传。
 
 ## 归约模式
 

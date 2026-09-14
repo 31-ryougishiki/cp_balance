@@ -123,12 +123,22 @@ def _resolve_first_token(
 
 def _collect(args: argparse.Namespace) -> int:
     cases, model_hint = _load_cases(Path(args.questions))
+    if args.kind:
+        cases = [
+            item for item in cases
+            if str(item.get("kind") or "") == args.kind
+        ]
+    if args.limit > 0:
+        cases = cases[: args.limit]
+    if not cases:
+        raise SystemExit("no cases selected")
     model = args.model or model_hint or "glm-52"
     endpoint = args.url.rstrip("/") + args.endpoint
     results: list[dict[str, Any]] = []
     print(
         f"[collect] url={args.url} endpoint={args.endpoint} model={model} "
-        f"cases={len(cases)} max_completion_tokens={args.max_completion_tokens} "
+        f"cases={len(cases)} kind={args.kind or 'all'} "
+        f"max_completion_tokens={args.max_completion_tokens} "
         f"temperature={args.temperature}"
     )
 
@@ -277,6 +287,17 @@ def _build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--model", default="", help="served model name (default: questions.json hint)")
     collect.add_argument("--endpoint", default="/v1/completions")
     collect.add_argument("--max-completion-tokens", type=int, default=50)
+    collect.add_argument(
+        "--kind",
+        default="",
+        help="only run this kind from questions.json, e.g. short or long",
+    )
+    collect.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="only run the first N selected cases; 20 runs the short set first",
+    )
     collect.add_argument("--temperature", type=float, default=0.0)
     collect.add_argument("--timeout", type=float, default=600.0)
     collect.set_defaults(func=_collect)
