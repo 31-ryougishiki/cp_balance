@@ -42,7 +42,7 @@ vllm serve /mnt/share/weights/GLM-5.2-W4A8C8 \
   --distributed-executor-backend mp \
   --max_model_len 135000 \
   --max-num-batched-tokens 16384 \
-  --served-model-name glm \
+  --served-model-name glm glm-52 \
   --gpu-memory-utilization 0.9 \
   --max-num-seqs 32 \
   --trust-remote-code \
