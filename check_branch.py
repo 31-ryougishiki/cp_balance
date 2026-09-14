@@ -6,7 +6,7 @@ builder then logs one "[CP_BALANCE][branch]" line per rank and batch for BOTH
 branches, including the gate that refused zigzag, so a branch is proven by a
 log line instead of by the absence of one.
 
-    python check_branch.py --url http://127.0.0.1:8034 --log /tmp/cp_on.log
+    python check_branch.py --url http://127.0.0.1:8034 --log cp_on.log
 
 It sends one short prompt (must stay CONTINUOUS) and one long prompt (must
 become ZIGZAG) and prints the log evidence of both windows.

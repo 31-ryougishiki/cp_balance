@@ -109,7 +109,7 @@ def build_env(cfg: dict) -> dict:
     repo = cfg.get("repo")
     if repo:
         env["VLLM_ASCEND_REPO"] = str(repo)
-        env["PYTHONPATH"] = str(repo) + ":" + env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
     if cfg.get("cp_balance") is not None:
         env["VLLM_ASCEND_CP_BALANCE"] = str(int(cfg["cp_balance"]))
     if cfg.get("min_tokens") is not None:

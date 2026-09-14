@@ -15,10 +15,10 @@ special/format tokens in the comparison.
 
 Usage::
 
-    python compare_first_token.py collect --url http://127.0.0.1:8034 --out /tmp/cp_on.json
+    python compare_first_token.py collect --url http://127.0.0.1:8034 --out cp_on.json
     # restart the service with the other VLLM_ASCEND_CP_BALANCE value
-    python compare_first_token.py collect --url http://127.0.0.1:8035 --out /tmp/cp_off.json
-    python compare_first_token.py compare /tmp/cp_on.json /tmp/cp_off.json
+    python compare_first_token.py collect --url http://127.0.0.1:8035 --out cp_off.json
+    python compare_first_token.py compare cp_on.json cp_off.json
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -23,6 +24,18 @@ import serve_config
 
 HERE = Path(__file__).resolve().parent
 COUNTS = ("path=fixed_order", "path=native", "branch=ZIGZAG", "[CP_BALANCE][plan]", "branch=CONTINUOUS")
+
+
+def wait_port_free(port: int, timeout: int = 60) -> bool:
+    """Wait until nothing listens on the port (previous service released it)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2)
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                return True
+        time.sleep(2)
+    return False
 
 
 def wait_ready(port: int, proc: subprocess.Popen, timeout: int) -> tuple:
@@ -87,11 +100,13 @@ def main() -> int:
 
     matrix = serve_config.load_config(args.matrix)
     entries = [str(item) for item in (matrix.get("configs") or [])]
-    if args.only:
-        keep = {item.strip() for item in args.only.split(",") if item.strip()}
-        entries = [entry for entry in entries if entry in keep]
     resolved = {entry: serve_config.load_config(entry) for entry in entries}
     keys = {entry: str(resolved[entry].get("name") or entry) for entry in entries}
+    if args.only:
+        keep = {item.strip() for item in args.only.split(",") if item.strip()}
+        entries = [entry for entry in entries if entry in keep or keys[entry] in keep]
+        resolved = {entry: resolved[entry] for entry in entries}
+        keys = {entry: keys[entry] for entry in entries}
     compares = matrix.get("compare") or []
     plan = ["matrix=%s configs=%s" % (matrix.get("name"), ",".join(entries))]
     for entry in entries:
@@ -106,7 +121,7 @@ def main() -> int:
         print("[matrix] dry-run: nothing launched, no output directory created", flush=True)
         return 0
 
-    out = Path(args.out) if args.out else HERE / ("matrix_%s_%s" % (matrix.get("name", "run"), time.strftime("%m%d_%H%M")))
+    out = Path(args.out) if args.out else Path.cwd() / ("matrix_%s_%s" % (matrix.get("name", "run"), time.strftime("%m%d_%H%M")))
     out.mkdir(parents=True, exist_ok=True)
     summary = (out / "summary.txt").open("w", encoding="utf-8")
 
@@ -149,18 +164,21 @@ def main() -> int:
             if ok:
                 collect_log = out / (name + ".collect.txt")
                 with collect_log.open("w", encoding="utf-8") as clog:
-                    subprocess.run(
+                    collect = subprocess.run(
                         [sys.executable, str(HERE / "compare_first_token.py"), "collect", "--url", "http://127.0.0.1:%s" % port, "--out", str(out / (name + ".json"))],
                         stdout=clog,
                         stderr=subprocess.STDOUT,
                     )
                 lines = [line for line in collect_log.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
-                log("  " + (lines[-1] if lines else "collect produced no output"))
+                suffix = "" if collect.returncode == 0 else " (collect rc=%s)" % collect.returncode
+                log("  " + (lines[-1] if lines else "collect produced no output") + suffix)
             log("  " + (fingerprint_from_log(log_path) or "WARNING: no [cp_balance] fingerprint in " + str(log_path)))
             text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
             for key in COUNTS:
                 log("  count %-22s %s" % (key, text.count(key)))
             stop(proc, log)
+            if not wait_port_free(port):
+                log("  WARNING: port %s still busy after stopping the service" % port)
 
     failed = []
     for item in compares:

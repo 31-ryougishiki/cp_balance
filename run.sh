@@ -8,6 +8,12 @@
 set -o pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 CFG=$1
-[ -n "$CFG" ] || CFG=default
-shift || true
+case "$CFG" in
+  ""|-*)
+    CFG=default
+    ;;
+  *)
+    shift || true
+    ;;
+esac
 exec python3 "$HERE/serve_config.py" "$CFG" "$@"

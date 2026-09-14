@@ -5,7 +5,7 @@
 
 ## 配置化：每次测试 = `configs/` 下一条 JSON
 
-启动脚本只负责读 JSON：
+启动脚本只负责读 JSON。所有产物（服务日志、`*.json`、`matrix_*/`）默认写在**当前目录**，不再用 `/tmp`：
 
 ```bash
 bash run.sh configs/glm52_cur_cp0.json      # 也可以只写名字
@@ -87,7 +87,7 @@ bash run.sh glm52_cur_cp1
 python compare_first_token.py collect \
     --url http://127.0.0.1:8034 \
     --kind short \
-    --out /tmp/cp_on_short.json
+    --out cp_on_short.json
 
 #  停服务，起 CP_BALANCE=0 的服务（configs/glm52_cur_cp0.json）
 bash run.sh glm52_cur_cp0
@@ -95,14 +95,14 @@ bash run.sh glm52_cur_cp0
 python compare_first_token.py collect \
     --url http://127.0.0.1:8035 \
     --kind short \
-    --out /tmp/cp_off_short.json
+    --out cp_off_short.json
 
-python compare_first_token.py compare /tmp/cp_on_short.json /tmp/cp_off_short.json
+python compare_first_token.py compare cp_on_short.json cp_off_short.json
 
 #  短请求通过后，再跑长请求
-python compare_first_token.py collect --url http://127.0.0.1:8035 --kind long --out /tmp/cp_off_long.json
-# 重新起 CP_BALANCE=1 服务，再用 --kind long 采集 /tmp/cp_on_long.json
-# python compare_first_token.py compare /tmp/cp_on_long.json /tmp/cp_off_long.json
+python compare_first_token.py collect --url http://127.0.0.1:8035 --kind long --out cp_off_long.json
+# 重新起 CP_BALANCE=1 服务，再用 --kind long 采集 cp_on_long.json
+# python compare_first_token.py compare cp_on_long.json cp_off_long.json
 ```
 
 短请求不会触发 `MIN_TOKENS=2048`，因此它们主要验证关闭/开启路径的基础行为；
@@ -135,9 +135,9 @@ SFA metadata builder 会为**两条分支**各打一行 `[CP_BALANCE][branch]`�
 每 batch 一次），所以“走哪条分支”由日志行本身回答，而不是靠“没有日志”推断。
 
 ```bash
-bash run.sh glm52_cur_cp1 > /tmp/cp_on.log 2>&1
+bash run.sh glm52_cur_cp1 > cp_on.log 2>&1
 # 另一个终端
-python check_branch.py --url http://127.0.0.1:8034 --log /tmp/cp_on.log
+python check_branch.py --url http://127.0.0.1:8034 --log cp_on.log
 ```
 
 判据：末行 `[check] RESULT: PASS`。脚本自己选一条短、一条长 prompt，打印各自的
@@ -201,12 +201,12 @@ bash run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确
 
 ```bash
 # 当前分支 CP_BALANCE=0（configs/glm52_cur_cp0.json，端口 8034）
-bash run.sh glm52_cur_cp0 > /tmp/cur_off.log 2>&1
-python compare_first_token.py collect --url http://127.0.0.1:8034 --out /tmp/cur_off.json
+bash run.sh glm52_cur_cp0 > cur_off.log 2>&1
+python compare_first_token.py collect --url http://127.0.0.1:8034 --out cur_off.json
 # 停服务，换 base 代码树（configs/glm52_base_cp0.json，端口 8036）
-bash run.sh glm52_base_cp0 > /tmp/base_off.log 2>&1
-python compare_first_token.py collect --url http://127.0.0.1:8036 --out /tmp/base_off.json
-python compare_first_token.py compare --require-text /tmp/cur_off.json /tmp/base_off.json
+bash run.sh glm52_base_cp0 > base_off.log 2>&1
+python compare_first_token.py collect --url http://127.0.0.1:8036 --out base_off.json
+python compare_first_token.py compare --require-text cur_off.json base_off.json
 ```
 
 判据：`first-token match: 40/40` + `text_head match: 40/40` + 末行
@@ -215,20 +215,20 @@ python compare_first_token.py compare --require-text /tmp/cur_off.json /tmp/base
 日志判据（证明 B 走的是原集合通信）：
 
 ```bash
-grep -c "\[CP_BALANCE\]\[reduce\] path=native" /tmp/cur_off.log        # > 0
-grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" /tmp/cur_off.log   # == 0
-grep -c "\[CP_BALANCE\]\[plan\]" /tmp/cur_off.log                     # == 0
-grep -c "branch=CONTINUOUS" /tmp/cur_off.log                            # > 0
-grep -m1 "\[cp_balance\] REPO=" /tmp/cur_off.log                       # 确认代码树
+grep -c "\[CP_BALANCE\]\[reduce\] path=native" cur_off.log        # > 0
+grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" cur_off.log   # == 0
+grep -c "\[CP_BALANCE\]\[plan\]" cur_off.log                     # == 0
+grep -c "branch=CONTINUOUS" cur_off.log                            # > 0
+grep -m1 "\[cp_balance\] REPO=" cur_off.log                       # 确认代码树
 ```
 
 失败时先做（先分清"测量问题"还是"代码差异"）：
 
 ```bash
 # 1) 两次服务到底加载了哪个代码树 / 开了什么
-grep -m1 "\[cp_balance\]" /tmp/cur_off.log /tmp/base_off.log
+grep -m1 "\[cp_balance\]" cur_off.log base_off.log
 # 2) 运行期用了哪种归约（CP=0 必须是 path=native，不能出现 path=fixed_order）
-grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" /tmp/cur_off.log
+grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" cur_off.log
 # 3) 两份 JSON 是不是本轮采集的
 python -c "import json;[print(f, json.load(open(f))[\"url\"], json.load(open(f))[\"created_at\"]) for f in (\"cur_off.json\", \"base_off.json\")]"
 ```
@@ -247,7 +247,7 @@ python -c "import json;[print(f, json.load(open(f))[\"url\"], json.load(open(f))
 C 的数值随之改变，原验收要重跑：
 
 ```bash
-python compare_first_token.py compare /tmp/cp_on.json /tmp/cur_off.json
+python compare_first_token.py compare cp_on.json cur_off.json
 # C 日志应同时有 [CP_BALANCE][plan] 与 [CP_BALANCE][reduce] path=fixed_order
 ```
 
