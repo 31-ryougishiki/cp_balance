@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Collect and compare the first output token of long Chinese prompts.
 
 Generation requests follow the GLM-5.2 service template exactly::
@@ -289,7 +289,9 @@ def _compare(args: argparse.Namespace) -> int:
         print(f"[compare] case count differs: {len(a)} vs {len(b)}")
         return 1
 
+    require_text = bool(getattr(args, "require_text", False))
     passed = 0
+    head_ok = 0
     by_kind: dict[str, list[int]] = {}
     mismatches: list[str] = []
     for item_a, item_b in zip(a, b):
@@ -298,24 +300,32 @@ def _compare(args: argparse.Namespace) -> int:
         same_token = item_a.get("first_token") == item_b.get("first_token")
         if same_token and item_a.get("first_token_id") is not None:
             same_token = item_a.get("first_token_id") == item_b.get("first_token_id")
+        same_head = item_a.get("text_head") == item_b.get("text_head")
+        head_ok += int(same_head)
         stats = by_kind.setdefault(kind, [0, 0])
         stats[1] += 1
-        if same_prompt and same_token:
+        if same_prompt and same_token and (same_head or not require_text):
             passed += 1
             stats[0] += 1
             print(
                 f"[{item_a.get('index', 0):02d}][{kind}] OK  token={item_a.get('first_token')!r}"
+                + ("" if same_head else "  text_head=DIFF")
             )
         else:
+            reason = "text_head" if (same_token and not same_head) else "token"
             mismatches.append(
                 f"case {item_a.get('index')}[{kind}]: prompt_same={same_prompt} "
+                f"diff={reason} "
                 f"A={item_a.get('first_token')!r} B={item_b.get('first_token')!r}"
             )
             print(
                 f"[{item_a.get('index', 0):02d}][{kind}] DIFF token {item_a.get('first_token')!r} != "
-                f"{item_b.get('first_token')!r}, prompt_same={same_prompt}"
+                f"{item_b.get('first_token')!r}, prompt_same={same_prompt}, text_head_same={same_head}"
             )
     print(f"[compare] first-token match: {passed}/{len(a)}")
+    print(f"[compare] text_head match: {head_ok}/{len(a)}")
+    if require_text and head_ok != len(a):
+        mismatches.append(f"text_head mismatch on {len(a) - head_ok}/{len(a)} cases")
     for kind, (ok, total) in sorted(by_kind.items()):
         print(f"[compare] {kind}: {ok}/{total}")
     if mismatches:
@@ -356,6 +366,11 @@ def _build_parser() -> argparse.ArgumentParser:
     compare = sub.add_parser("compare", help="compare two collect JSON files")
     compare.add_argument("left")
     compare.add_argument("right")
+    compare.add_argument(
+        "--require-text",
+        action="store_true",
+        help="also require the first 120 characters of the completion to match",
+    )
     compare.set_defaults(func=_compare)
     return parser
 

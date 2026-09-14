@@ -119,6 +119,66 @@ token 数与日志证据：
 属正常现象；日志没有实时落盘时（重定向未带 `PYTHONUNBUFFERED=1`）脚本会报
 "no branch line"。
 
+## 非 cp_balance 路径与 base 一致（验证方案）
+
+目标：`VLLM_ASCEND_CP_BALANCE=0` 时，当前分支与 `vllm-ascend-base`（原版 DSA-CP）
+走同一套算子与集合通信。为此 cp_balance 专用逻辑改为按 **forward 级**的
+`zigzag_active()` 生效，不再用配置级 `enable_dsa_cp()` 判断。
+
+### 步骤 0：静态门控检查（秒级）
+
+```bash
+python check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
+                       --base-repo /opt/its/z30055003/vllm-ascend-base
+# 判据：末行 [check] RESULT: PASS
+```
+
+断言内容：两处 row-parallel 归约 + embedding/MoE finalize 归约都由
+`zigzag_active()` 门控；裸的 `VLLM_ASCEND_CP_BALANCE` 只被资格判定读取；
+`_q_proj_and_k_up_proj` 的融合算子块与 base 逐字节相同。
+
+### 步骤 1：CP_BALANCE=0 vs base（主判据）
+
+`run.sh` 的代码树由 `VLLM_ASCEND_REPO` 决定（默认当前分支目录）。起 base
+分支时必须覆盖它，否则加载的仍是当前分支代码：
+
+```bash
+# 当前分支：CP_BALANCE=0，且不设 REDUCE_MODE（验证"默认即一致"）
+VLLM_ASCEND_CP_BALANCE=0 VLLM_ASCEND_CP_BALANCE_DEBUG=1 PYTHONUNBUFFERED=1 \
+    VLLM_ASCEND_REPO=/opt/its/z30055003/vllm-ascend \
+    bash run.sh eth2 8034 > /tmp/cur_off.log 2>&1
+python compare_first_token.py collect --url http://127.0.0.1:8034 --out /tmp/cur_off.json
+# 停服务，换 base 代码树（同一个 run.sh）
+VLLM_ASCEND_CP_BALANCE=0 PYTHONUNBUFFERED=1 \
+    VLLM_ASCEND_REPO=/opt/its/z30055003/vllm-ascend-base \
+    bash run.sh eth2 8035 > /tmp/base_off.log 2>&1
+python compare_first_token.py collect --url http://127.0.0.1:8035 --out /tmp/base_off.json
+python compare_first_token.py compare --require-text /tmp/cur_off.json /tmp/base_off.json
+```
+
+判据：`first-token match: 40/40` + `text_head match: 40/40` + 末行
+`[compare] RESULT: PASS`（`--require-text` 把前 120 字符生成文本也变成硬判据）。
+
+日志判据（证明 B 走的是原集合通信）：
+
+```bash
+grep -c "\[CP_BALANCE\]\[reduce\] path=native" /tmp/cur_off.log        # > 0
+grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" /tmp/cur_off.log   # == 0
+grep -c "\[CP_BALANCE\]\[plan\]" /tmp/cur_off.log                     # == 0
+grep -c "branch=CONTINUOUS" /tmp/cur_off.log                            # > 0
+grep -m1 "\[cp_balance\] REPO=" /tmp/cur_off.log                       # 确认代码树
+```
+
+### 步骤 2：C 回归（补回融合算子后必须重跑）
+
+当前分支补回了 base 的 `npu_transpose_batchmatmul`（`_q_proj_and_k_up_proj`），
+C 的数值随之改变，原验收要重跑：
+
+```bash
+python compare_first_token.py compare /tmp/cp_on.json /tmp/cur_off.json
+# C 日志应同时有 [CP_BALANCE][plan] 与 [CP_BALANCE][reduce] path=fixed_order
+```
+
 ## plan 自测
 
 在远端 vLLM 环境执行，不需要 NPU：
@@ -137,4 +197,5 @@ python selftest_plan.py --cp-size 16 --cases 2000
 | `questions.json` | 20 组 article + question + prompt |
 | `compare_first_token.py` | collect / compare 首词元 |
 | `check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
+| `check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
 | `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
