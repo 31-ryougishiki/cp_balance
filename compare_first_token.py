@@ -78,6 +78,29 @@ def _visible_first_unit(text: str) -> str | None:
     return text[0]
 
 
+def _normalize_token_str(token: Any) -> Any:
+    """Repair latin-1-decoded UTF-8 token strings returned by /tokenize.
+
+    Some vLLM builds convert byte-level BPE tokens to ``str`` with latin-1.
+    A Chinese token therefore comes back like ``åĤæŀľ`` instead of ``如果``.
+    Re-encode as latin-1 and decode as UTF-8 when that round-trip is valid;
+    otherwise keep the original token unchanged.
+    """
+    if not isinstance(token, str) or not token:
+        return token
+    try:
+        raw = token.encode("latin-1")
+    except UnicodeEncodeError:
+        return token
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return token
+    if "\ufffd" in decoded:
+        return token
+    return decoded
+
+
 def _resolve_first_token(
     base_url: str,
     model: str,
@@ -109,7 +132,7 @@ def _resolve_first_token(
         token = None
         token_id = None
         if isinstance(token_strs, list) and token_strs:
-            token = token_strs[0]
+            token = _normalize_token_str(token_strs[0])
         if isinstance(token_ids, list) and token_ids:
             token_id = int(token_ids[0])
             if token is None:
