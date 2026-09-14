@@ -134,6 +134,7 @@ def _collect(args: argparse.Namespace) -> int:
 
     for index, item in enumerate(cases):
         question = str(item.get("question") or item.get("q") or "")
+        kind = str(item.get("kind") or "?")
         prompt = _prompt_of(item)
         # Keep this payload exactly equal to the service template; only prompt
         # content changes per case.
@@ -180,6 +181,7 @@ def _collect(args: argparse.Namespace) -> int:
             {
                 "index": index,
                 "id": item.get("id", index + 1),
+                "kind": kind,
                 "question": question,
                 "prompt_sha256": prompt_sha,
                 "prompt_chars": len(prompt),
@@ -191,7 +193,7 @@ def _collect(args: argparse.Namespace) -> int:
             }
         )
         print(
-            f"[{index:02d}] chars={len(prompt):5d} token={token!r} "
+            f"[{index:02d}][{kind}] chars={len(prompt):5d} token={token!r} "
             f"source={token_source} text={text[:24]!r} ({elapsed:.2f}s)"
         )
 
@@ -227,27 +229,34 @@ def _compare(args: argparse.Namespace) -> int:
         return 1
 
     passed = 0
+    by_kind: dict[str, list[int]] = {}
     mismatches: list[str] = []
     for item_a, item_b in zip(a, b):
+        kind = str(item_a.get("kind") or "?")
         same_prompt = item_a.get("prompt_sha256") == item_b.get("prompt_sha256")
         same_token = item_a.get("first_token") == item_b.get("first_token")
         if same_token and item_a.get("first_token_id") is not None:
             same_token = item_a.get("first_token_id") == item_b.get("first_token_id")
+        stats = by_kind.setdefault(kind, [0, 0])
+        stats[1] += 1
         if same_prompt and same_token:
             passed += 1
+            stats[0] += 1
             print(
-                f"[{item_a.get('index', 0):02d}] OK  token={item_a.get('first_token')!r}"
+                f"[{item_a.get('index', 0):02d}][{kind}] OK  token={item_a.get('first_token')!r}"
             )
         else:
             mismatches.append(
-                f"case {item_a.get('index')}: prompt_same={same_prompt} "
+                f"case {item_a.get('index')}[{kind}]: prompt_same={same_prompt} "
                 f"A={item_a.get('first_token')!r} B={item_b.get('first_token')!r}"
             )
             print(
-                f"[{item_a.get('index', 0):02d}] DIFF token {item_a.get('first_token')!r} != "
+                f"[{item_a.get('index', 0):02d}][{kind}] DIFF token {item_a.get('first_token')!r} != "
                 f"{item_b.get('first_token')!r}, prompt_same={same_prompt}"
             )
     print(f"[compare] first-token match: {passed}/{len(a)}")
+    for kind, (ok, total) in sorted(by_kind.items()):
+        print(f"[compare] {kind}: {ok}/{total}")
     if mismatches:
         print("[compare] RESULT: FAIL")
         for line in mismatches:

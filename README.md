@@ -5,8 +5,13 @@
 
 ## 数据
 
-`questions.json` 是唯一数据源，共 20 条，每条包含 `id`、`article`、
-`question` 和可直接发送的 `prompt`。修改或新增问题时只改这个 JSON。
+`questions.json` 是唯一数据源，共 40 条，每条包含 `id`、`kind`、`article`、
+`question` 和可直接发送的 `prompt`：
+
+- `items[0:20]`：`kind=short`，prompt 长度全部小于 1000 字符；
+- `items[20:40]`：`kind=long`，prompt 约 4400 字符，用于触发 CP_BALANCE。
+
+`collect` 按 JSON 顺序发送，因此会先跑完 20 条短请求，再跑长请求。
 
 请求方式与现场模板一致：
 
