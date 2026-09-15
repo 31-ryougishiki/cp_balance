@@ -29,6 +29,14 @@ DETERMINISTIC_ENV = {
     "ATB_MATMUL_SHUFFLE_K_ENABLE": "0",
     "ATB_LLM_LCOC_ENABLE": "0",
 }
+# Machine fields that may differ per host (same configs, several servers, or a
+# shared checkout).  Set them in the shell before launching the harness; the
+# command line --set still wins over them.
+ENV_OVERRIDES = (
+    ("local_ip", "CP_BALANCE_LOCAL_IP"),
+    ("nic_name", "CP_BALANCE_NIC_NAME"),
+    ("devices", "CP_BALANCE_DEVICES"),
+)
 REPORT_ENV = (
     "VLLM_ASCEND_REPO",
     "PYTHONPATH",
@@ -93,6 +101,14 @@ def apply_set(cfg: dict, expr: str) -> None:
     for part in parts[:-1]:
         node = node.setdefault(part, {})
     node[parts[-1]] = value
+
+
+def apply_env_overrides(cfg: dict) -> dict:
+    for key, env_name in ENV_OVERRIDES:
+        value = os.environ.get(env_name)
+        if value:
+            cfg[key] = value
+    return cfg
 
 
 def build_env(cfg: dict) -> dict:
@@ -239,7 +255,7 @@ def main() -> int:
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="override a config field")
     args = parser.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = apply_env_overrides(load_config(args.config))
     for expr in args.set:
         apply_set(cfg, expr)
     env = build_env(cfg)

@@ -384,6 +384,9 @@ bash perf/profile_a5.sh               # 性能：cp0 / cp1 / cp0_repeat / base_c
 A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.133.112、
 `/mnt/share/weights/GLM-5.2-w4a4c8-mxfp4`、vendor 环境用 `prelude` 字段承载），
 `configs/_common_a5_mtp.json` 在其之上打开 MTP（deepseek_mtp, 1 token）：精度组用它，性能组不用。
+换机器（IP / 网卡不同）不用改配置：在那台机器的 shell 里导出 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME`（需要时还有 `CP_BALANCE_DEVICES`）即可，例如
+`export CP_BALANCE_LOCAL_IP=141.61.133.104 CP_BALANCE_NIC_NAME=eth2`；命令行 `--set` 优先于环境变量。
+
 两处需要按现场确认：base 代码树路径（默认 `/home/z30055003/vllm-ascend-base`）与
 `cp_balance` 仓库位置（脚本假定在当前目录运行）。
 

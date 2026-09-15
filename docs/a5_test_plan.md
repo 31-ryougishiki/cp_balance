@@ -49,6 +49,36 @@ bash run.sh glm52_a5_cur_cp0 --dry-run --print-env
 `PRELUDE=True`、`SPEC=deepseek_mtp/1`（这是带 MTP 的配置；`prof_a5_*` 是 `SPEC=off`），
 以及 argv 以 `bash -c 'source /mnt/share/.../set_env.bash && mkdir -p /tmp/cp_balance_a5_plog && exec vllm serve ...` 开头。
 
+### 2.4 换到另一台机器（IP / 网卡不同）
+
+同一套配置可以直接在别的机器上跑，只要在那台机器的 shell 里把"机器身份"覆盖掉（不写进配置，
+共享检出时两台机器互不干扰）：
+
+```bash
+export CP_BALANCE_LOCAL_IP=141.61.133.104
+export CP_BALANCE_NIC_NAME=eth2
+# 需要时也可以覆盖可见卡：export CP_BALANCE_DEVICES=0,1,2,3,4,5,6,7
+
+bash run.sh glm52_a5_cur_cp0 --dry-run --print-env
+#   期望：NIC=eth2 IP=141.61.133.104，且 env 里 HCCL_IF_IP / GLOO_SOCKET_IFNAME /
+#   TP_SOCKET_IFNAME / HCCL_SOCKET_IFNAME 都跟着变
+
+bash accuracy/round2_verify_a5.sh    # 之后的流程完全一样，driver/矩阵会继承这些环境变量
+bash perf/profile_a5.sh
+```
+
+命令行的 `--set local_ip=141.61.133.104 --set nic_name=eth2` 优先级更高，临时改一个值时用它。
+
+这台机器上还要存在 A5 配置里写死的这几样（不存在就改 `configs/_common_a5.json`）：
+
+| 什么 | 默认值 | 改哪里 |
+| --- | --- | --- |
+| 当前代码树 | `/home/z30055003/vllm-ascend` | `_common_a5.json`（repo）+ `matrix_a5_b_vs_base.json`（static_check） |
+| base 代码树 | `/home/z30055003/vllm-ascend-base` | `matrix_a5_b_vs_base.json`（static_check.base_repo）与三套 base 配置（glm52_a5_base_cp0[_repeat]） |
+| 模型 | `/mnt/share/weights/GLM-5.2-w4a4c8-mxfp4` | `_common_a5.json` 的 `model` |
+| vendor 环境 | `/mnt/share/l00622059/vendors/custom_transformer/bin/set_env.bash` | `_common_a5.json` 的 `prelude` |
+| 卡与并行度 | 8 卡（devices 0-7）、TP=8 | `_common_a5.json` 的 `devices` / `tp_size`（base 侧配置继承同一份公共配置） |
+
 ## 3. 精度：一条命令
 
 ```bash
