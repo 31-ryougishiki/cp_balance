@@ -110,18 +110,46 @@ def print_delta(labels: list[str], summaries: list[dict]) -> None:
         print("  %-44s %12.1f %12.1f %+12.1f %9.1f" % (name[:44], before, after, diff, pct))
 
 
+def step_table(summary: dict) -> list[tuple]:
+    """Normalize step_trace_time rows to (step, computing, comm, overlapped, free)."""
+    if not summary.get("ranks"):
+        return []
+    rank = sorted(summary["ranks"])[0]
+    rows = summary["ranks"][rank].get("steps") or []
+    table = []
+    for row in rows:
+        def find(*hints, exclude=()):
+            for key, value in row.items():
+                low = key.lower()
+                if any(hint in low for hint in hints) and not any(bad in low for bad in exclude):
+                    return value
+            return ""
+        step = find("step")
+        if step == "":
+            continue
+        table.append(
+            (
+                step,
+                find("computing"),
+                find("communication"),
+                find("overlap", exclude=("not",)),
+                find("free"),
+            )
+        )
+    return table
+
+
 def print_steps(labels: list[str], summaries: list[dict]) -> None:
-    for label, summary in zip(labels, summaries):
-        payloads = list(summary["ranks"].values())
-        if not payloads or not payloads[0].get("steps"):
-            return
-    print("[compare] first steps of the lowest-rank worker (raw step_trace_time columns)")
-    for label, summary in zip(labels, summaries):
-        first = sorted(summary["ranks"])[0]
-        steps = summary["ranks"][first]["steps"][:4]
-        print("  %s rank=%s" % (label, first))
-        for step in steps:
-            print("    " + json.dumps(step, ensure_ascii=False))
+    tables = [step_table(summary) for summary in summaries]
+    if not any(tables):
+        return
+    print("[compare] step_trace_time of the lowest-rank worker (us)")
+    for label, summary, table in zip(labels, summaries, tables):
+        rank = sorted(summary["ranks"])[0] if summary.get("ranks") else "?"
+        print("  %s rank=%s" % (label, rank))
+        print("    %6s %14s %14s %14s %14s" % ("step", "computing", "comm", "overlapped", "free"))
+        for row in table[:16]:
+            print("    %6s %14s %14s %14s %14s" % row)
 
 
 def main() -> int:
