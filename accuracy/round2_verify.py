@@ -64,6 +64,10 @@ class Report:
         self.results.append((step, label, status, detail))
         self.log("%-4s %-4s %s" % (status, step, (label + "  " + detail).rstrip()))
 
+    def skip(self, step: str, label: str, detail: str = "") -> None:
+        self.results.append((step, label, "SKIP", detail))
+        self.log("SKIP %-4s %s" % (step, (label + "  " + detail).rstrip()))
+
     def close(self) -> None:
         self.summary.close()
 
@@ -78,18 +82,38 @@ def git_head(repo: Path) -> str:
 
 
 
+def base_tree_ok(base: Path) -> bool:
+    """The base comparison needs <base>/vllm_ascend/attention/sfa_v1.py."""
+    return (base / "vllm_ascend/attention/sfa_v1.py").is_file()
+
+
+def base_missing_note(base: Path) -> str:
+    return (
+        "base checkout not readable at %s/vllm_ascend/attention/sfa_v1.py -- "
+        "create it with: git clone <same origin as the current tree> %s && "
+        "git -C %s checkout c7990e5e4   (or rerun with --steps 0,1,3)"
+        % (base, base, base)
+    )
+
+
 def step0(rep: Report, cur: Path, base: Path) -> bool:
     rep.log("step 0: static gates (no service)")
     ok_all = True
-    checks = (
-        ("fields", [sys.executable, str(ROOT / "perf/check_cp_balance_fields.py"), "--repo", cur]),
-        ("b_path", [sys.executable, str(HERE / "check_b_path.py"), "--repo", cur, "--base-repo", base]),
-    )
+    checks = [("fields", [sys.executable, str(ROOT / "perf/check_cp_balance_fields.py"), "--repo", cur])]
+    if base_tree_ok(base):
+        checks.append(
+            ("b_path", [sys.executable, str(HERE / "check_b_path.py"), "--repo", cur, "--base-repo", base])
+        )
+    else:
+        rep.skip("0", "static/b_path", base_missing_note(base))
     for label, cmd in checks:
         proc = run(cmd)
         text = proc.stdout + proc.stderr
         (rep.out / ("00_static_" + label + ".txt")).write_text(text, encoding="utf-8")
         ok = proc.returncode == 0 and "RESULT: PASS" in text
+        for line in text.splitlines():
+            if "FAIL" in line:
+                rep.log("  " + line.strip())
         tail = [line for line in text.splitlines() if line.strip()]
         rep.verdict("0", "static/" + label, ok, (tail[-1].strip() if tail else "(no output)"))
         if label == "fields":
@@ -347,7 +371,8 @@ def main() -> int:
     plan = [
         "steps            %s" % ",".join(sorted(steps)),
         "repo(cur)        %s  HEAD=%s" % (cur_raw, git_head(cur)),
-        "repo(base)       %s  HEAD=%s" % (base_raw, git_head(base)),
+        "repo(base)       %s  HEAD=%s%s"
+        % (base_raw, git_head(base), "" if base_tree_ok(base) else "   <-- MISSING, steps 0/b_path and 2 will be skipped"),
         "out              %s" % out,
         "step 0           static gates: check_cp_balance_fields, check_b_path",
         "step 1           %s" % C_MATRIX,
@@ -372,16 +397,28 @@ def main() -> int:
         ok, _ = step_matrix(rep, "1", C_MATRIX, "c_accept")
         verdicts.append(ok)
     if "2" in steps:
-        ok, _ = step_matrix(rep, "2", B_MATRIX, "b_equiv")
-        verdicts.append(ok)
+        if base_tree_ok(base):
+            ok, _ = step_matrix(rep, "2", B_MATRIX, "b_equiv")
+            verdicts.append(ok)
+        else:
+            rep.skip("2", B_MATRIX, base_missing_note(base))
     if "3" in steps:
         verdicts.append(step3(rep, cur, args.ready_timeout))
 
     rep.log("---- verdict ----")
     for step, label, status, detail in rep.results:
         rep.log("%-4s step %s  %-28s %s" % (status, step, label, detail))
-    overall = bool(verdicts) and all(verdicts)
-    rep.log("RESULT: %s" % ("PASS" if overall else "FAIL"))
+    fails = [item for item in rep.results if item[2] == "FAIL"]
+    skips = [item for item in rep.results if item[2] == "SKIP"]
+    if fails:
+        overall = False
+        rep.log("RESULT: FAIL")
+    elif skips:
+        overall = True
+        rep.log("RESULT: PASS (partial: %d item(s) skipped, see SKIP lines)" % len(skips))
+    else:
+        overall = True
+        rep.log("RESULT: PASS")
     rep.log("send back: %s/summary.txt" % out)
     for name in ("01_c_accept/summary.txt", "02_b_equiv/summary.txt", "03_optional/cmp_patched_vs_baseline.txt"):
         path = out / name

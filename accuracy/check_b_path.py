@@ -115,7 +115,11 @@ def main() -> int:
     if args.base_repo:
         base_file = Path(args.base_repo) / "vllm_ascend/attention/sfa_v1.py"
         if not base_file.is_file():
-            check(False, f"base checkout not readable: {base_file}")
+            check(
+                False,
+                f"base checkout not readable: {base_file} (pass --base-repo <vllm-ascend-base "
+                "checkout>, or omit the flag to run only the zigzag-gating assertions)",
+            )
         else:
             base_body = _function_body(base_file.read_text(encoding="utf-8"), "def _q_proj_and_k_up_proj")
             check(
