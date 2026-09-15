@@ -295,9 +295,10 @@ python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 `*_ascend_pt` 原始 trace 不用拷。
 
 判读先看 `profile_compare.py` 的第一张表：每个长度一行，`steps` 必须是 1（不是 1 会打
-WARNING），`attn/ref` 是 attention 时间除以 MoE dispatch 时间——后者在四个配置里做完全相同的
-活、cp_balance 也从不碰它，用它当内参可以消掉机器漂移。上一轮同样代码路径的两个配置整体差 12%，
-比要测的效应还大，所以不看比值看不出来。
+WARNING），然后只看绝对量——attention 时间、集合通信时间、算子总时间、不采样的 clean_s，四个数随
+长度怎么走。不要发明比值去消漂移：上一轮同样代码路径的两个配置整体差 12%，这个噪声地板只能靠
+重复一轮来量，不能靠除掉一个所谓不受影响的算子——zigzag 会改变各 rank 持有的 token 集合，MoE 的
+路由分布跟着变，dispatch 时间本来就可能变。
 
 判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
 

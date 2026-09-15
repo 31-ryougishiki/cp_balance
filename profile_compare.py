@@ -6,11 +6,6 @@
 One config now produces one capture window per prompt length, so the primary
 table is per length, side by side:
 
-* attn/ref is the attention time divided by the MoE expert dispatch time.  The
-  dispatch does exactly the same work in every config and cp_balance never
-  touches it, so it acts as a clock: run-to-run machine drift cancels and only
-  the attention change survives.  Without it the previous round showed 12%
-  between two configs that run the same code path.
 * clean_s is the same request measured with the profiler off, i.e. the only
   honest end-to-end number; profiled_s shows what profiling itself costs.
 
@@ -50,13 +45,6 @@ def window_metric(info: dict, key: str) -> float:
     return float(values.get("mean") or 0.0)
 
 
-def window_ratio(info: dict) -> float:
-    ref = window_metric(info, "reference_us")
-    if ref <= 0:
-        return 0.0
-    return window_metric(info, "attention_us") / ref
-
-
 def order_labels(a: dict, b: dict) -> list:
     def size(label: str) -> int:
         for source in (a, b):
@@ -72,7 +60,7 @@ def print_lengths(labels: list, summaries: list) -> None:
     print("[compare] per-length windows (values are the mean over ranks)")
     header = "  %-10s %9s %6s" % ("length", "tokens", "steps")
     for label in labels:
-        header += " | %-11s %11s %11s %9s %9s" % (label + " attn/ref", "attn_us", "op_total_us", "profiled_s", "clean_s")
+        header += " | %11s %11s %12s %9s" % (label + " attn_us", "comm_us", "op_total_us", "clean_s")
     print(header)
     for length in order_labels(windows[0], windows[1] if len(windows) > 1 else windows[0]):
         info0 = next((w.get(length) for w in windows if w.get(length)), None)
@@ -83,14 +71,14 @@ def print_lengths(labels: list, summaries: list) -> None:
         for source in windows:
             info = source.get(length)
             if info is None:
-                row += " | %-11s %11s %11s %9s %9s" % ("-", "-", "-", "-", "-")
+                row += " | %11s %11s %12s %9s" % ("-", "-", "-", "-")
                 continue
-            row += " | %-11.5f %11.1f %11.1f %9s %9s" % (
-                window_ratio(info),
+            clean = info.get("clean_wall_s")
+            row += " | %11.1f %11.1f %12.1f %9s" % (
                 window_metric(info, "attention_us"),
+                window_metric(info, "comm_total_us"),
                 window_metric(info, "op_total_us"),
-                ("%.3f" % info["wall_s"]) if info.get("wall_s") else "-",
-                ("%.3f" % info["clean_wall_s"]) if info.get("clean_wall_s") else "-",
+                ("%.3f" % clean) if clean else "-",
             )
         print(row)
 
@@ -99,19 +87,22 @@ def print_length_delta(labels: list, summaries: list) -> None:
     if len(summaries) != 2:
         return
     left, right = (windows_of(summary) for summary in summaries)
-    print("[compare] per-length delta %s -> %s (attn/ref cancels machine drift)" % tuple(labels[:2]))
-    print("  %-10s %12s %12s %10s | %12s %12s %10s" % ("length", "A attn/ref", "B attn/ref", "delta%", "A clean_s", "B clean_s", "delta%"))
+    print("[compare] per-length delta %s -> %s (absolute times and the unprofiled wall clock)" % tuple(labels[:2]))
+    print(
+        "  %-10s %12s %12s %10s | %12s %12s %10s"
+        % ("length", "A attn_us", "B attn_us", "delta%", "A clean_s", "B clean_s", "delta%")
+    )
     for length in order_labels(left, right):
         a, b = left.get(length), right.get(length)
         if not a or not b:
             continue
-        ra, rb = window_ratio(a), window_ratio(b)
+        aa, ab = window_metric(a, "attention_us"), window_metric(b, "attention_us")
         ca, cb = a.get("clean_wall_s"), b.get("clean_wall_s")
-        ratio = ("%+.1f%%" % (100.0 * (rb / ra - 1))) if ra > 0 and rb > 0 else "-"
+        attn = ("%+.1f%%" % (100.0 * (ab / aa - 1))) if aa > 0 else "-"
         clean = ("%+.1f%%" % (100.0 * (cb / ca - 1))) if ca and cb else "-"
         print(
-            "  %-10s %12.5f %12.5f %10s | %12s %12s %10s"
-            % (length, ra, rb, ratio, "%.3f" % ca if ca else "-", "%.3f" % cb if cb else "-", clean)
+            "  %-10s %12.1f %12.1f %10s | %12s %12s %10s"
+            % (length, aa, ab, attn, "%.3f" % ca if ca else "-", "%.3f" % cb if cb else "-", clean)
         )
 
 

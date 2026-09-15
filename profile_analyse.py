@@ -42,11 +42,6 @@ TIME_COLUMNS = ("total time(us)", "total time", "duration(us)", "duration", "tot
 NAME_COLUMNS = ("op type", "optype", "name", "type", "kernel name")
 COUNT_COLUMNS = ("count", "calls", "num")
 WINDOW_RE = re.compile(r"_(\d{17})_ascend_pt$")
-# Rows used to normalise across runs: cp_balance does not touch the MoE expert
-# dispatch, so its time is a usable clock for machine drift.
-REFERENCE_OP = "MoeDistributeDispatchV2"
-
-
 def norm(text: str) -> str:
     return "".join(ch for ch in str(text).lower() if ch not in " _-()%")
 
@@ -96,7 +91,7 @@ def analyse_root(root: Path, force: bool) -> None:
 
 def summarize_ops(out_dir: Path, limit: int = 60) -> dict:
     """Aggregate op_statistic.csv (or kernel_details.csv) by operator name."""
-    result = {"ops": [], "comm": [], "attention_us": 0.0, "reference_us": 0.0, "op_total_us": 0.0, "source": None}
+    result = {"ops": [], "comm": [], "attention_us": 0.0, "op_total_us": 0.0, "source": None}
     stats = out_dir / "op_statistic.csv"
     if stats.is_file():
         header, rows = read_rows(stats)
@@ -118,8 +113,6 @@ def summarize_ops(out_dir: Path, limit: int = 60) -> dict:
                     result["comm"].append(item)
                 if any(hint in name for hint in ATTENTION_HINTS):
                     result["attention_us"] += total
-                if name == REFERENCE_OP:
-                    result["reference_us"] += total
     if not result["ops"]:
         details = out_dir / "kernel_details.csv"
         if details.is_file():
@@ -140,7 +133,6 @@ def summarize_ops(out_dir: Path, limit: int = 60) -> dict:
     result["comm"].sort(key=lambda item: -item["total_us"])
     result["op_total_us"] = round(sum(item["total_us"] for item in result["ops"]), 3)
     result["attention_us"] = round(result["attention_us"], 3)
-    result["reference_us"] = round(result["reference_us"], 3)
     result["ops"] = result["ops"][:limit]
     return result
 
@@ -266,7 +258,6 @@ def summarize_window(window: str, ranks: list, meta: dict) -> dict:
         "comm_total_us": digest(per_rank, lambda p: sum(i["total_us"] for i in p.get("comm", []))),
         "comm_calls": digest(per_rank, lambda p: sum(i["count"] or 0 for i in p.get("comm", []))),
         "attention_us": digest(per_rank, lambda p: p.get("attention_us")),
-        "reference_us": digest(per_rank, lambda p: p.get("reference_us")),
         "step_computing_us": digest(per_rank, lambda p: p.get("step_computing_us")),
         "step_comm_us": digest(per_rank, lambda p: p.get("step_comm_us")),
     }
@@ -293,7 +284,7 @@ def summarize_dir(root: Path, force: bool) -> dict:
         label = info.get("label") or "?"
         audit = info.get("audit") or {}
         print(
-            "[analyse] %-18s %-10s ranks=%-3d steps=%-4s op_total=%9.1fus attention=%8.1fus ref=%9.1fus"
+            "[analyse] %-18s %-10s ranks=%-3d steps=%-4s op_total=%9.1fus attention=%8.1fus comm=%9.1fus"
             % (
                 window,
                 label,
@@ -301,7 +292,7 @@ def summarize_dir(root: Path, force: bool) -> dict:
                 audit.get("kernel_steps"),
                 info["digest"]["op_total_us"].get("mean", 0.0),
                 info["digest"]["attention_us"].get("mean", 0.0),
-                info["digest"]["reference_us"].get("mean", 0.0),
+                info["digest"]["comm_total_us"].get("mean", 0.0),
             )
         )
         if audit.get("kernel_steps") not in (None, 1):
