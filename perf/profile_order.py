@@ -461,13 +461,14 @@ def report_devices(rank_dir: Path, top: int) -> None:
 def infer_repo(prof_dir: Path, explicit: str) -> Path | None:
     if explicit:
         return Path(explicit)
-    here = Path(__file__).resolve().parent
+    here = Path(__file__).resolve().parent.parent
     for config in sorted((here / "configs").glob("*.json")):
         try:
             data = json.loads(config.read_text(encoding="utf-8"))
         except ValueError:
             continue
-        if str((data.get("profiler") or {}).get("dir") or "") == str(prof_dir):
+        configured = (data.get("profiler") or {}).get("dir")
+        if configured and Path(str(configured)) == prof_dir:
             return Path(data["repo"]) if data.get("repo") else None
     fallback = Path("/opt/its/z30055003/vllm-ascend")
     return fallback if fallback.is_dir() else None

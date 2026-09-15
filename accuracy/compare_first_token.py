@@ -34,7 +34,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-DEFAULT_QUESTIONS = Path(__file__).with_name("questions.json")
+DEFAULT_QUESTIONS = Path(__file__).resolve().parent.parent / "questions.json"
 
 
 def _load_cases(path: Path) -> tuple[list[dict[str, Any]], str]:

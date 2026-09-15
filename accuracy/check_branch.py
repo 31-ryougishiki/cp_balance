@@ -19,13 +19,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-DEFAULT_QUESTIONS = Path(__file__).with_name("questions.json")
+DEFAULT_QUESTIONS = Path(__file__).resolve().parent.parent / "questions.json"
 BRANCH_TAG = "[CP_BALANCE][branch]"
 
 

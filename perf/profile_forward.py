@@ -36,12 +36,16 @@ import re
 import signal
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-import serve_config
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+import serve_config  # noqa: E402 - needs ROOT on sys.path first
 
 HERE = Path(__file__).resolve().parent
 WINDOW_RE = re.compile(r"_(\d{17})_ascend_pt$")
@@ -69,7 +73,7 @@ def dir_size_mb(path: str) -> float:
 
 
 def load_cases(kind: str) -> tuple:
-    payload = json.loads(io.open(HERE / "questions.json", encoding="utf-8").read())
+    payload = json.loads(io.open(ROOT / "questions.json", encoding="utf-8").read())
     items = list(payload.get("items") or payload)
     cases = [item for item in items if str(item.get("kind") or "") == kind]
     if not cases:
@@ -241,7 +245,7 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     base = "http://127.0.0.1:%s" % port
     endpoint = base + args.endpoint
     lengths = [int(x) for x in (cfg.get("lengths") or [])]
-    log_path = HERE / ("profile_%s.log" % cfg["name"])
+    log_path = ROOT / ("profile_%s.log" % cfg["name"])
     log("[profile] service log -> %s" % log_path)
 
     prepare_dir(prof_dir)
@@ -361,7 +365,7 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     summary["mean_elapsed_s"] = round(
         sum(entry["wall_s"] for entry in entries) / max(len(entries), 1), 4
     )
-    out = HERE / ("prof_%s.json" % cfg["name"])
+    out = ROOT / ("prof_%s.json" % cfg["name"])
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     log("[profile] %d windows -> %s" % (len(entries), out))
     return summary

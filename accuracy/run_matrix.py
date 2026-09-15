@@ -20,7 +20,10 @@ import time
 import urllib.request
 from pathlib import Path
 
-import serve_config
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+import serve_config  # noqa: E402 - needs ROOT on sys.path first
 
 HERE = Path(__file__).resolve().parent
 COUNTS = ("path=fixed_order", "path=native", "branch=ZIGZAG", "[CP_BALANCE][plan]", "branch=CONTINUOUS")
@@ -154,7 +157,7 @@ def main() -> int:
         log("run %s (port %s)" % (name, port))
         with log_path.open("w", encoding="utf-8") as handle:
             proc = subprocess.Popen(
-                ["bash", str(HERE / "run.sh"), entry],
+                ["bash", str(ROOT / "run.sh"), entry],
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,

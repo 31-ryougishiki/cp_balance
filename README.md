@@ -1,9 +1,33 @@
-# cp_balance 首词元对比
+# cp_balance 验证与调优
 
-用 20 组中文文章 + 问题长 prompt，分别请求 `VLLM_ASCEND_CP_BALANCE=1` 和
-`=0` 的服务，比较第一个生成词元。
+两条独立的线，共用根目录的启动器与配置：
 
-## 配置化：每次测试 = `configs/` 下一条 JSON
+```
+cp_balance/
+  run.sh              启动入口（共用）
+  serve_config.py     配置加载 -> 环境变量 + vllm serve 参数（共用）
+  configs/            每条测试一份 JSON（共用）
+  questions.json      20 组文章 + 问题 + prompt（共用）
+  accuracy/           精度测试：首词元/文本相等、走哪条分支、静态路径证明
+    compare_first_token.py    collect / compare 首词元
+    check_branch.py           证明请求走 ZIGZAG 还是 CONTINUOUS
+    check_b_path.py           静态证明 cp_balance 只作用于 zigzag 路径
+    run_matrix.py / .sh       矩阵：串行起停服务、采集、对比、给裁定
+  perf/               性能采集：profiling 采集、解析、对比、算子归因
+    profile_forward.py        按长度逐档采集（只含 prefill 步的窗口）
+    profile_analyse.py        解析 + 按窗口分组 + 审计每个窗口几步
+    profile_compare.py        逐长度对比
+    profile_order.py          算子调用顺序 + device kernel 归因到 host scope
+    check_cp_balance_fields.py  静态自检三个容器的字段是否对得上
+    profile.sh / profile_l6.sh  全量 / 6 层的一键入口
+```
+
+产物（`matrix_*/`、`prof_*/`、`prof_*.json`、`profile_*.log`）都写在仓库根目录。
+
+## 配置化（两条线共用）：每次测试 = `configs/` 下一条 JSON
+
+下面到「分支证明」之前的几节是精度测试的内容（首词元/文本对比、分支证明、
+与 base 的等价性），profiling 那几节属于性能采集。
 
 启动脚本只负责读 JSON。所有产物（服务日志、`*.json`、`matrix_*/`）默认写在**当前目录**，不再用 `/tmp`：
 
@@ -32,8 +56,8 @@ bash run.sh glm52_cur_cp0 --dry-run --print-env   # 只打印命令与环境
 矩阵（一次跑多组并给裁定）同样是 JSON：
 
 ```bash
-bash run_matrix.sh configs/matrix_b_vs_base.json      # B==base + 噪声地板
-bash run_matrix.sh configs/matrix_c_accept.json       # C 验收（首 token）
+bash accuracy/run_matrix.sh configs/matrix_b_vs_base.json      # B==base + 噪声地板
+bash accuracy/run_matrix.sh configs/matrix_c_accept.json       # C 验收（首 token）
 ```
 
 `configs` 字段列出要跑的配置，`compare` 列出对比项：`left`/`right` 用配置的 `name`，
@@ -84,7 +108,7 @@ latin-1 形式，也会回退到 latin-1 解码。
 bash run.sh glm52_cur_cp1
 
 #  先只发前 20 条短请求（<1000 字符）
-python compare_first_token.py collect \
+python accuracy/compare_first_token.py collect \
     --url http://127.0.0.1:8034 \
     --kind short \
     --out cp_on_short.json
@@ -92,17 +116,17 @@ python compare_first_token.py collect \
 #  停服务，起 CP_BALANCE=0 的服务（configs/glm52_cur_cp0.json）
 bash run.sh glm52_cur_cp0
 
-python compare_first_token.py collect \
+python accuracy/compare_first_token.py collect \
     --url http://127.0.0.1:8035 \
     --kind short \
     --out cp_off_short.json
 
-python compare_first_token.py compare cp_on_short.json cp_off_short.json
+python accuracy/compare_first_token.py compare cp_on_short.json cp_off_short.json
 
 #  短请求通过后，再跑长请求
-python compare_first_token.py collect --url http://127.0.0.1:8035 --kind long --out cp_off_long.json
+python accuracy/compare_first_token.py collect --url http://127.0.0.1:8035 --kind long --out cp_off_long.json
 # 重新起 CP_BALANCE=1 服务，再用 --kind long 采集 cp_on_long.json
-# python compare_first_token.py compare cp_on_long.json cp_off_long.json
+# python accuracy/compare_first_token.py compare cp_on_long.json cp_off_long.json
 ```
 
 短请求不会触发 `MIN_TOKENS=2048`，因此它们主要验证关闭/开启路径的基础行为；
@@ -137,7 +161,7 @@ SFA metadata builder 会为**两条分支**各打一行 `[CP_BALANCE][branch]`�
 ```bash
 bash run.sh glm52_cur_cp1 > cp_on.log 2>&1
 # 另一个终端
-python check_branch.py --url http://127.0.0.1:8034 --log cp_on.log
+python accuracy/check_branch.py --url http://127.0.0.1:8034 --log cp_on.log
 ```
 
 判据：末行 `[check] RESULT: PASS`。脚本自己选一条短、一条长 prompt，打印各自的
@@ -164,7 +188,7 @@ token 数与日志证据：
 ### 步骤 0：静态门控检查（秒级）
 
 ```bash
-python check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
+python accuracy/check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
                        --base-repo /opt/its/z30055003/vllm-ascend-base
 # 判据：末行 [check] RESULT: PASS
 ```
@@ -176,7 +200,7 @@ python check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
 ### 步骤 1：一条命令跑完四组实验（推荐）
 
 ```bash
-bash run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确定性变量
+bash accuracy/run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确定性变量
 ```
 
 串行跑四组，每组服务起停一次、采 40 条 prompt：
@@ -202,11 +226,11 @@ bash run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确
 ```bash
 # 当前分支 CP_BALANCE=0（configs/glm52_cur_cp0.json，端口 8034）
 bash run.sh glm52_cur_cp0 > cur_off.log 2>&1
-python compare_first_token.py collect --url http://127.0.0.1:8034 --out cur_off.json
+python accuracy/compare_first_token.py collect --url http://127.0.0.1:8034 --out cur_off.json
 # 停服务，换 base 代码树（configs/glm52_base_cp0.json，端口 8036）
 bash run.sh glm52_base_cp0 > base_off.log 2>&1
-python compare_first_token.py collect --url http://127.0.0.1:8036 --out base_off.json
-python compare_first_token.py compare --require-text cur_off.json base_off.json
+python accuracy/compare_first_token.py collect --url http://127.0.0.1:8036 --out base_off.json
+python accuracy/compare_first_token.py compare --require-text cur_off.json base_off.json
 ```
 
 判据：`first-token match: 40/40` + `text_head match: 40/40` + 末行
@@ -247,7 +271,7 @@ python -c "import json;[print(f, json.load(open(f))[\"url\"], json.load(open(f))
 C 的数值随之改变，原验收要重跑：
 
 ```bash
-python compare_first_token.py compare cp_on.json cur_off.json
+python accuracy/compare_first_token.py compare cp_on.json cur_off.json
 # C 日志应同时有 [CP_BALANCE][plan] 与 [CP_BALANCE][reduce] path=fixed_order
 ```
 
@@ -262,7 +286,7 @@ profiler 侧带 delay_iterations=0 / max_iterations=1。采完再按同一串长
 
 ```bash
 cd /opt/its/z30055003/cp_balance
-python3 profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
+python3 perf/profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
 ```
 
 | 配置 | 代码树 | CP_BALANCE | REDUCE_MODE | 作用 |
@@ -285,9 +309,9 @@ python3 profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_
 采集完在远端解析（需要 torch_npu 与 CANN）：
 
 ```bash
-python3 profile_analyse.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
-python3 profile_compare.py prof_cur_cp0 prof_cur_cp1
-python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
+python3 perf/profile_analyse.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
+python3 perf/profile_compare.py prof_cur_cp0 prof_cur_cp1
+python3 perf/profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 ```
 
 要回传的：每个 profiler 目录下的 `summary.json`、windows.json（窗口与长度的对应关系）、
@@ -307,7 +331,7 @@ WARNING），然后只看绝对量——attention 时间、集合通信时间、
 结论一律来自 `profile.sh` 的 78 层四组。6 层是给“改完一处后想快速再看一眼顺序和
 归因”用的，由启动参数覆盖，不改模型目录：
 
-    bash profile_l6.sh
+    bash perf/profile_l6.sh
 
 `_profile_l6_common.json` 里 `--hf-overrides` 设 `num_hidden_layers=6`，并把
 `indexer_types` 按真实的 full/shared 周期裁成 6 项
@@ -321,9 +345,9 @@ WARNING），然后只看绝对量——attention 时间、集合通信时间、
 
 ### 算子调用顺序 + 对应代码
 
-    python3 profile_order.py prof_l6_cur_cp1 --rank rank0
-    python3 profile_order.py prof_l6_cur_cp1 --rank rank0 --devices
-    python3 profile_order.py prof_l6_cur_cp1 --rank rank0 --trim
+    python3 perf/profile_order.py prof_l6_cur_cp1 --rank rank0
+    python3 perf/profile_order.py prof_l6_cur_cp1 --rank rank0 --devices
+    python3 perf/profile_order.py prof_l6_cur_cp1 --rank rank0 --trim
 
 它流式读 `ASCEND_PROFILER_OUTPUT/trace_view.json`（不整文件加载），把主线程的 host 事件按时间
 排开，自动找出重复的层周期，打印三张表：
@@ -354,17 +378,17 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 | `run.sh` | 启动入口：读 `configs/*.json`，交给 `serve_config.py` |
 | `serve_config.py` | 配置加载/继承/覆盖 → 环境变量 + `vllm serve` 参数（含 `--profiler-config`） |
 | `configs/` | 每条测试一份 JSON（模型/ip/port/nic/tp/开关/profiler），含矩阵配置 |
-| `run_matrix.py` | 按矩阵 JSON 串行起停服务、采集、对比、给裁定 |
+| `accuracy/run_matrix.py` | 按矩阵 JSON 串行起停服务、采集、对比、给裁定 |
 | `questions.json` | 20 组 article + question + prompt |
-| `compare_first_token.py` | collect / compare 首词元 |
-| `check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
-| `check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
-| `run_matrix.sh` | `run_matrix.py` 的入口包装 |
-| `profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
-| `profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
-| `profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
-| `profile.sh` | 78 层全量一轮：自检 + 采集 + 解析 + 对比 + 顺序归因，结论来源 |
-| `check_cp_balance_fields.py` | 静态自检 ZigzagPlan / meta dict / DSACPContext 三方字段是否对得上 |
-| `profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |
-| `profile_l6.sh` | 6 层快跑：只用于快速复看顺序与归因，不用于结论 |
+| `accuracy/compare_first_token.py` | collect / compare 首词元 |
+| `accuracy/check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
+| `accuracy/check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
+| `accuracy/run_matrix.sh` | `run_matrix.py` 的入口包装 |
+| `perf/profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
+| `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
+| `perf/profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
+| `perf/profile.sh` | 78 层全量一轮：自检 + 采集 + 解析 + 对比 + 顺序归因，结论来源 |
+| `perf/check_cp_balance_fields.py` | 静态自检 ZigzagPlan / meta dict / DSACPContext 三方字段是否对得上 |
+| `perf/profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |
+| `perf/profile_l6.sh` | 6 层快跑：只用于快速复看顺序与归因，不用于结论 |
 | `_profile_l6_common.json` | 6 层覆盖（`--hf-overrides`），其余继承 `_profile_common.json` |
