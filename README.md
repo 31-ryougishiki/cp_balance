@@ -283,7 +283,11 @@ python3 profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_
 `"profiler": {"enabled": true}` 生成 `--profiler-config`；`/start_profile` 只在
 设置该参数后才存在。
 
-采集完在远端解析（需要 torch_npu）：
+解析必须在远端另起进程补跑：mp 后端下 worker 是 daemon 进程，torch_npu 的解析器
+拒绝在 daemon 里解析，所以 /stop_profile 之后不会自动出现 ASCEND_PROFILER_OUTPUT。
+`analyse()` 接收父目录并自己并行处理所有 `*_ascend_pt`，不要在一个进程里按 rank 循环调用。
+
+采集完在远端解析（需要 torch_npu 与 CANN）：
 
 ```bash
 python3 profile_analyse.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0

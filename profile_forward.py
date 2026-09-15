@@ -38,6 +38,12 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
+def prepare_dir(path: str) -> None:
+    """torch_npu refuses to parse a directory the current user cannot write."""
+    Path(path).mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o755)
+
+
 def load_cases(kind: str) -> tuple[list[dict], str]:
     payload = json.loads(io.open(HERE / "questions.json", encoding="utf-8").read())
     items = list(payload.get("items") or payload)
@@ -156,6 +162,7 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     log_path = HERE / ("profile_%s.log" % cfg["name"])
     log("[profile] service log -> %s" % log_path)
 
+    prepare_dir(prof_dir)
     wait_port_free(port)
     with open(log_path, "w", encoding="utf-8") as handle:
         proc = subprocess.Popen(argv, env=env, stdout=handle, stderr=handle)
