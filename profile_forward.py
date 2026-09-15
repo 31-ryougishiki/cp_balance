@@ -233,7 +233,8 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     env = serve_config.build_env(cfg)
     argv = serve_config.build_argv(cfg)
     port = int(cfg["port"])
-    log(serve_config.fingerprint(cfg, env))
+    fingerprint = serve_config.fingerprint(cfg, env)
+    log(fingerprint)
     log("[profile] dir=%s" % prof_dir)
     cases, model_hint = load_cases(args.kind)
     model = args.model or model_hint or "glm-52"
@@ -342,6 +343,7 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
 
     windows = {
         "config": cfg["name"],
+        "fingerprint": fingerprint,
         "repo": cfg.get("repo"),
         "head": serve_config.git_head(cfg.get("repo")),
         "cp_balance": cfg.get("cp_balance"),

@@ -68,6 +68,13 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
+def to_float(value) -> float:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def iter_trace_events(path: Path):
     """Stream the traceEvents array without loading the whole file."""
     decoder = json.JSONDecoder()
@@ -196,12 +203,22 @@ def lookup(name: str, code_map: dict, limit: int = 3) -> str:
     return ""
 
 
-def collect_timeline(rank_dir: Path) -> list:
+def collect_timeline(rank_dir: Path, max_events: int) -> tuple:
+    """One streaming pass: host events, device events, and a cat histogram.
+
+    The histogram is the important part.  The previous round produced a 3.1 GB
+    trace_view.json and not a single event matched the host categories this
+    script guessed, which told us nothing about why.  Now every category that
+    actually exists is printed with a count and an example, so an unmatched
+    trace is self-explaining instead of empty.
+    """
     trace = rank_dir / OUTPUT_DIR / "trace_view.json"
     if not trace.is_file():
         raise SystemExit("missing %s (run profile_analyse.py first)" % trace)
     log("[order] reading %s (%.1f MB)" % (trace, trace.stat().st_size / 1e6))
-    events = []
+    cats = {}
+    host = []
+    device = []
     for event in iter_trace_events(trace):
         if event.get("ph") != "X":
             continue
@@ -209,22 +226,41 @@ def collect_timeline(rank_dir: Path) -> list:
         stamp = event.get("ts")
         if not isinstance(duration, (int, float)) or not isinstance(stamp, (int, float)):
             continue
-        category = str(event.get("cat") or "").lower()
-        is_device = any(key in category for key in DEVICE_CATS)
-        if not is_device and not any(key in category for key in HOST_CATS):
-            continue
-        events.append(
-            {
-                "name": str(event.get("name") or "?"),
-                "cat": category,
-                "pid": event.get("pid"),
-                "tid": event.get("tid"),
-                "ts": float(stamp),
-                "dur": float(duration),
-                "device": is_device,
-            }
+        raw_cat = str(event.get("cat") or "")
+        item = cats.setdefault(raw_cat, {"count": 0, "example": "", "names": 0})
+        item["count"] += 1
+        if not item["example"]:
+            item["example"] = str(event.get("name") or "?")
+        category = raw_cat.lower()
+        entry = {
+            "name": str(event.get("name") or "?"),
+            "cat": category,
+            "pid": event.get("pid"),
+            "tid": event.get("tid"),
+            "ts": float(stamp),
+            "dur": float(duration),
+        }
+        if any(key in category for key in DEVICE_CATS):
+            if len(device) < max_events:
+                device.append(entry)
+        elif any(key in category for key in HOST_CATS):
+            if len(host) < max_events:
+                host.append(entry)
+    return host, device, cats
+
+
+def report_cats(cats: dict, top: int = 25) -> None:
+    if not cats:
+        log("[order] trace has no X events at all")
+        return
+    total = sum(item["count"] for item in cats.values())
+    log("[order] event categories in this trace (%d X events, %d categories)" % (total, len(cats)))
+    log("  %-34s %10s %8s %s" % ("cat", "count", "share", "example name"))
+    for cat, item in sorted(cats.items(), key=lambda kv: -kv[1]["count"])[:top]:
+        log(
+            "  %-34s %10d %7.1f%% %s"
+            % (cat[:34], item["count"], 100.0 * item["count"] / total, str(item["example"])[:40])
         )
-    return events
 
 
 def main_stream(events: list) -> list:
@@ -345,72 +381,81 @@ def report_scopes(device_events: list, annotations: list, code_map: dict, top: i
         )
 
 
-def kernel_columns(header: list) -> dict:
-    lookup = {key.lower(): key for key in header}
+def csv_columns(header: list) -> dict:
+    lookup = {str(key).lower(): key for key in header}
     return {
-        "step": lookup.get("step"),
         "name": lookup.get("name") or lookup.get("type"),
         "start": lookup.get("start time(us)") or lookup.get("start time"),
         "dur": lookup.get("duration(us)") or lookup.get("duration"),
+        "core": lookup.get("accelerator core"),
     }
 
 
-def report_devices(rank_dir: Path, step: int, top: int) -> None:
-    """Ordered device kernels of one step; picks the busiest step when unsure.
+def read_kernels(path: Path) -> list:
+    """Ordered device kernels.  This profiler writes no Step column, so the
+    order comes from Start Time(us) instead."""
+    rows = []
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        columns = csv_columns(reader.fieldnames or [])
+        if not columns["name"] or not columns["dur"]:
+            log("[order] kernel_details.csv has no usable name/duration column")
+            return []
+        for row in reader:
+            rows.append(
+                {
+                    "name": str(row.get(columns["name"])),
+                    "start": to_float(row.get(columns["start"])) if columns["start"] else 0.0,
+                    "dur": to_float(row.get(columns["dur"])),
+                    "core": str(row.get(columns["core"])) if columns["core"] else "",
+                }
+            )
+    rows.sort(key=lambda item: item["start"])
+    return rows
 
-    The step numbering of kernel_details.csv is not part of any contract, so a
-    fixed --step can silently print nothing.  Count the rows per step first and
-    fall back to the busiest one instead.
-    """
+
+def report_devices(rank_dir: Path, top: int) -> None:
+    """Ordered device kernels plus one repeating layer cycle."""
     path = rank_dir / OUTPUT_DIR / "kernel_details.csv"
     if not path.is_file():
         log("[order] no kernel_details.csv, skipping device order")
         return
-    columns: dict = {}
-    counts: dict = {}
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        columns = kernel_columns(reader.fieldnames or [])
-        if not columns["step"] or not columns["name"] or not columns["dur"]:
-            log("[order] unexpected kernel_details.csv header: %s" % list(reader.fieldnames or []))
-            return
-        for row in reader:
-            key = str(row.get(columns["step"]))
-            counts[key] = counts.get(key, 0) + 1
-    if not counts:
-        log("[order] kernel_details.csv is empty")
+    log("[order] streaming %s" % path)
+    rows = read_kernels(path)
+    if not rows:
         return
-    chosen = str(step)
-    if step < 0 or chosen not in counts:
-        busiest = max(counts.items(), key=lambda item: item[1])[0]
-        if step >= 0:
-            log("[order] step %s has no kernels (steps=%s); using step %s instead" % (step, sorted(counts)[:8], busiest))
-        chosen = busiest
-    rows = []
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            if str(row.get(columns["step"])) != chosen:
-                continue
-            rows.append(
-                {
-                    "name": str(row.get(columns["name"])),
-                    "dur": float(row.get(columns["dur"]) or 0.0),
-                    "start": float(row.get(columns["start"]) or 0.0) if columns["start"] else 0.0,
-                }
-            )
-    rows.sort(key=lambda item: item["start"])
-    total = sum(row["dur"] for row in rows) or 1.0
-    log("[order] device kernel order, step=%s, %s" % (chosen, path))
-    log("  %-5s %-52s %11s %10s %8s" % ("#", "kernel", "start_us", "dur_us", "share"))
-    for index, row in enumerate(rows[:top], 1):
-        log(
-            "  %-5d %-52s %11.1f %10.1f %7.1f%%"
-            % (index, row["name"][:52], row["start"], row["dur"], 100.0 * row["dur"] / total)
-        )
-    if len(rows) > top:
-        log("  ... %d more kernels" % (len(rows) - top))
-    log("[order] step %s: kernels=%d busy=%.1fus (start time is relative to the step)" % (chosen, len(rows), total))
+    busy = sum(row["dur"] for row in rows)
+    span = rows[-1]["start"] + rows[-1]["dur"] - rows[0]["start"]
+    log(
+        "[order] kernels=%d busy=%.1fus over a %.1fus span (%.1f%% occupied)"
+        % (len(rows), busy, span, 100.0 * busy / span if span else 0.0)
+    )
+    bucket = {}
+    for row in rows:
+        item = bucket.setdefault(row["name"], [0, 0.0])
+        item[0] += 1
+        item[1] += row["dur"]
+    log("[order] device time by kernel, top %d" % top)
+    log("  %-46s %8s %13s %8s" % ("kernel", "count", "total_us", "share"))
+    for name, (count, total) in sorted(bucket.items(), key=lambda kv: -kv[1][1])[:top]:
+        log("  %-46s %8d %13.1f %7.1f%%" % (name[:46], count, total, 100.0 * total / busy))
+    counts = {name: count for name, (count, _total) in bucket.items()}
+    markers = [name for name, count in counts.items() if count >= 3]
+    if not markers:
+        return
+    marker = max(markers, key=lambda name: counts[name])
+    hits = [index for index, row in enumerate(rows) if row["name"] == marker]
+    if len(hits) < 3:
+        log("[order] no repeating device cycle found (marker %s x%d)" % (marker, len(hits)))
+        return
+    cycle = rows[hits[1]:hits[2]]
+    log("[order] one device cycle, split on %s (occurrence %d..%d)" % (marker, 2, 3))
+    log("  %-5s %-46s %12s %11s" % ("#", "kernel", "start_us", "dur_us"))
+    for index, row in enumerate(cycle[:top], 1):
+        log("  %-5d %-46s %12.1f %11.1f" % (index, row["name"][:46], row["start"], row["dur"]))
+    if len(cycle) > top:
+        log("  ... %d more kernels" % (len(cycle) - top))
+    log("[order] cycle kernels=%d busy=%.1fus" % (len(cycle), sum(row["dur"] for row in cycle)))
 
 
 def infer_repo(prof_dir: Path, explicit: str) -> Path | None:
@@ -440,7 +485,7 @@ def main() -> int:
     parser.add_argument("--repo", default="", help="code tree to map names to (default: from configs/)")
     parser.add_argument("--top", type=int, default=60, help="rows printed per table")
     parser.add_argument("--devices", action="store_true", help="print the device kernel order instead")
-    parser.add_argument("--step", type=int, default=-1, help="step for --devices (-1 = busiest)")
+    parser.add_argument("--max-events", type=int, default=2000000, help="cap on stored events per class")
     parser.add_argument("--trim", action="store_true", help="also write order_<rank>.json")
     args = parser.parse_args()
 
@@ -457,9 +502,7 @@ def main() -> int:
     if not code_map["labels"]:
         log("[order] no record_function labels; run the service with VLLM_CUSTOM_SCOPES_FOR_PROFILING=1")
 
-    timeline = collect_timeline(rank_dir)
-    host = [event for event in timeline if not event["device"]]
-    device = [event for event in timeline if event["device"]]
+    host, device, cats = collect_timeline(rank_dir, args.max_events)
 
     if args.devices:
         annotations = [
@@ -473,12 +516,15 @@ def main() -> int:
             if "user_annotation" in event["cat"] or "cpu_op" in event["cat"]
         ]
         report_scopes(device, annotations, code_map, args.top)
-        report_devices(rank_dir, args.step, args.top)
+        report_devices(rank_dir, args.top)
         return 0
 
     events = host
     if not events:
-        raise SystemExit("no host events in the trace")
+        report_cats(cats)
+        log("[order] no event matched the host categories %s" % (HOST_CATS,))
+        log("[order] add the right category to HOST_CATS, or use --devices which reads the CSV")
+        return 1
     events.sort(key=lambda item: item["ts"])
     main_events = main_stream(events)
     head, cycle, marker = cycle_slice(main_events)
