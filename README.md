@@ -253,13 +253,23 @@ python compare_first_token.py compare cp_on.json cur_off.json
 
 ## plan 自测
 
-在远端 vLLM 环境执行，不需要 NPU：
+在远端执行，不需要 NPU，但需要 import 到 cp_balance 分支的 vllm_ascend：
 
 ```bash
-python selftest_plan.py --cp-size 16 --cases 2000
+python3 selftest_plan.py --repo /opt/its/z30055003/vllm-ascend --cases 2000
 ```
 
-判据：末行 `SELFTEST PLAN OK`。
+判据：先打一行 `[selftest] cp_zigzag loaded from ...`，末行 `SELFTEST PLAN OK`。
+
+`--repo` 会被插到 `sys.path[0]`，所以它决定 import 哪一棵树。这一点必须显式指定：
+
+- `vllm_ascend/layers/` 只存在于 `cp_balance` 与 `glm52_cp_balance_v3` 两个分支，
+  `main` 上没有；
+- site-packages 里如果装过一份 vllm-ascend，不指定 `--repo` 时会 import 到那一份，
+  报错就是 `No module named 'vllm_ascend.layers'`。
+
+脚本在 import 失败时会自己打印诊断：期望的文件路径、实际 import 到的 `vllm_ascend.__file__`、
+以及该检查的分支与 commit 命令。
 
 ## profiling：对比 cp_balance 开关下的 forward
 
@@ -358,7 +368,7 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 | `check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
 | `check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
 | `run_matrix.sh` | `run_matrix.py` 的入口包装 |
-| `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
+| `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape（`--repo` 指定代码树） |
 | `profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
 | `profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
 | `profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
