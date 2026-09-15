@@ -371,6 +371,34 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 触发 device→host 同步）。"是否真的走 zigzag"请用 `check_branch.py` 在非采集的
 一轮里证明，不要靠 profiling 这一轮。
 
+## A3 环境（16 卡，GLM-5.2-W4A8C8，7.246.78.75 / eth2）
+
+一条命令：
+
+```bash
+# 0. 预演（10 秒，不启动服务）：确认解析出的就是 A3 配置
+bash run.sh glm52_cur_cp0 --dry-run --print-env      # 期望 TP=16 NIC=eth2 IP=7.246.78.75
+
+# 1. 精度：静态门控 + C 验收 + B 等价性 + 可选 A/B（约 1 小时）
+bash accuracy/round2_verify_a3.sh
+
+# 2. 性能：78 层四组（cp0 / cp1 / cp0_repeat / base_cp0）+ 解析 + 归因
+bash perf/profile.sh
+```
+
+前置（两棵代码树都在同一台机器上）：
+
+```bash
+git -C /opt/its/z30055003/vllm-ascend pull           # 当前树，应含最新的 cp_balance 提交
+git -C /opt/its/z30055003/vllm-ascend-base log -1    # base 树，应为 c7990e5e4
+cd /opt/its/z30055003/cp_balance && git pull         # harness（本轮 driver + A5 配置）
+```
+
+与 A5 的差别：TP=16（cp_size=16，zigzag 每序列切 32 块）、模型是 W4A8C8（不是 mxfp4）、
+**没有 MTP**、profiling 沿用确定性环境变量；配置是 `configs/_common.json` +
+`configs/prof_*.json`，端口 8034~8037（prof_cur_cp0 与 repeat 同为 8034，串行不冲突）。
+判据、失败排查与回传清单见 `docs/cp_balance_remote_checklist.md`。
+
 ## A5 环境（8 卡，GLM-5.2-w4a4c8-mxfp4）
 
 A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传清单见 `docs/a5_test_plan.md`。
