@@ -1,0 +1,10 @@
+{
+  "extends": "_common.json",
+  "name": "_profile_common",
+  "profiler": {
+    "enabled": true,
+    "with_stack": false,
+    "ignore_frontend": true
+  },
+  "debug": 0
+}

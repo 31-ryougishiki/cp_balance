@@ -141,8 +141,27 @@ def build_argv(cfg: dict) -> list:
         argv += ["--served-model-name", *str(cfg["served_model_name"]).split()]
     if cfg.get("additional_config") is not None:
         argv += ["--additional_config", json.dumps(cfg["additional_config"], ensure_ascii=False)]
+    if (cfg.get("profiler") or {}).get("enabled"):
+        argv += ["--profiler-config", json.dumps(profiler_payload(cfg), ensure_ascii=False)]
     argv += [str(item) for item in (cfg.get("server_args") or [])]
     return argv
+
+
+def profiler_dir(cfg: dict) -> str:
+    profiler = cfg.get("profiler") or {}
+    path = profiler.get("dir") or (Path.cwd() / ("prof_" + str(cfg.get("name"))))
+    return str(Path(path).resolve())
+
+
+def profiler_payload(cfg: dict) -> dict:
+    """`--profiler-config` value; only the worker-side torch_npu fields."""
+    profiler = cfg.get("profiler") or {}
+    return {
+        "profiler": "torch",
+        "torch_profiler_dir": profiler_dir(cfg),
+        "torch_profiler_with_stack": bool(profiler.get("with_stack", False)),
+        "ignore_frontend": bool(profiler.get("ignore_frontend", True)),
+    }
 
 
 def git_head(repo) -> str:
@@ -162,7 +181,7 @@ def git_head(repo) -> str:
 def fingerprint(cfg: dict, env: dict) -> str:
     return (
         "[cp_balance] CONFIG=%s REPO=%s HEAD=%s MODEL=%s PORT=%s TP=%s NIC=%s IP=%s DEVICES=%s "
-        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s"
+        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s PROFILER=%s"
         % (
             cfg.get("name"),
             cfg.get("repo"),
@@ -178,6 +197,7 @@ def fingerprint(cfg: dict, env: dict) -> str:
             env.get("VLLM_ASCEND_CP_BALANCE_REDUCE_MODE"),
             env.get("VLLM_ASCEND_CP_BALANCE_DEBUG"),
             bool(cfg.get("deterministic")),
+            profiler_dir(cfg) if (cfg.get("profiler") or {}).get("enabled") else "off",
         )
     )
 

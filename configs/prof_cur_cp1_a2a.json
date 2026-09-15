@@ -1,0 +1,11 @@
+{
+  "extends": "_profile_common.json",
+  "name": "prof_cur_cp1_a2a",
+  "repo": "/opt/its/z30055003/vllm-ascend",
+  "port": 8037,
+  "cp_balance": 1,
+  "reduce_mode": "alltoall",
+  "profiler": {
+    "dir": "/opt/its/z30055003/cp_balance/prof_cur_cp1_a2a"
+  }
+}

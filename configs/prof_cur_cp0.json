@@ -1,0 +1,10 @@
+{
+  "extends": "_profile_common.json",
+  "name": "prof_cur_cp0",
+  "repo": "/opt/its/z30055003/vllm-ascend",
+  "port": 8034,
+  "cp_balance": 0,
+  "profiler": {
+    "dir": "/opt/its/z30055003/cp_balance/prof_cur_cp0"
+  }
+}

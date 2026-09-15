@@ -261,13 +261,52 @@ python selftest_plan.py --cp-size 16 --cases 2000
 
 判据：末行 `SELFTEST PLAN OK`。
 
+## profiling：对比 cp_balance 开关下的 forward
+
+四个配置串行跑，每个配置一次服务起停：
+
+```bash
+cd /opt/its/z30055003/cp_balance
+python3 profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
+```
+
+| 配置 | 代码树 | CP_BALANCE | REDUCE_MODE | 作用 |
+| --- | --- | --- | --- | --- |
+| `prof_cur_cp0` | 当前 | 0 | — | 与 base 等价的噪声基准 |
+| `prof_cur_cp1` | 当前 | 1 | allreduce | zigzag 现状（默认归约） |
+| `prof_cur_cp1_a2a` | 当前 | 1 | alltoall | zigzag + 低通信量归约 |
+| `prof_base_cp0` | base | 0 | — | 原版 DSA-CP 参照 |
+
+`profile_forward.py` 起服务 → 2 条 long prompt 热身（不采集）→ `POST /start_profile`
+→ 4 条 long prompt（串行，每条一个 prefill batch）→ `POST /stop_profile` → 停服务，
+写 `prof_<name>.json`。profiling 由配置里的
+`"profiler": {"enabled": true}` 生成 `--profiler-config`；`/start_profile` 只在
+设置该参数后才存在。
+
+采集完在远端解析（需要 torch_npu）：
+
+```bash
+python3 profile_analyse.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
+python3 profile_compare.py prof_cur_cp0 prof_cur_cp1
+python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
+```
+
+要回传的只有每个目录下的 `summary.json`（几 KB）、`prof_*.json`、`profile_*.log`
+和各次服务的指纹行；`*_ascend_pt` 原始 trace 不用拷。
+
+判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
+
+注意：profiling 配置里 `debug=0`（`[CP_BALANCE][plan]` 日志里有 `.tolist()`，会
+触发 device→host 同步）。"是否真的走 zigzag"请用 `check_branch.py` 在非采集的
+一轮里证明，不要靠 profiling 这一轮。
+
 ## 文件
 
 | 文件 | 作用 |
 | --- | --- |
 | `run.sh` | 启动入口：读 `configs/*.json`，交给 `serve_config.py` |
-| `serve_config.py` | 配置加载/继承/覆盖 → 环境变量 + `vllm serve` 参数 |
-| `configs/` | 每条测试一份 JSON（模型/ip/port/nic/tp/开关），含矩阵配置 |
+| `serve_config.py` | 配置加载/继承/覆盖 → 环境变量 + `vllm serve` 参数（含 `--profiler-config`） |
+| `configs/` | 每条测试一份 JSON（模型/ip/port/nic/tp/开关/profiler），含矩阵配置 |
 | `run_matrix.py` | 按矩阵 JSON 串行起停服务、采集、对比、给裁定 |
 | `questions.json` | 20 组 article + question + prompt |
 | `compare_first_token.py` | collect / compare 首词元 |
@@ -275,3 +314,6 @@ python selftest_plan.py --cp-size 16 --cases 2000
 | `check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
 | `run_matrix.sh` | `run_matrix.py` 的入口包装 |
 | `selftest_plan.py` | CPU 自测 zigzag plan 的覆盖、置换、equal-shape |
+| `profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
+| `profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
+| `profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |

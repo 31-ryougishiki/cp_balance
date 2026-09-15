@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 matrix_*/
+prof_*/
+*_ascend_pt/
 *.log
 /*.json
 /*.txt
