@@ -300,9 +300,10 @@ python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 
 判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
 
-### 6 层快跑（推荐先跑这个）
+### 6 层快跑（只用于快速复看，不用于结论）
 
-78 层每组启动约 10 分钟，调顺序和归因用不着全量。6 层由启动参数覆盖，不改模型目录：
+结论一律来自 `profile.sh` 的 78 层四组。6 层是给“改完一处后想快速再看一眼顺序和
+归因”用的，由启动参数覆盖，不改模型目录：
 
     bash profile_l6.sh
 
@@ -361,6 +362,7 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 | `profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
 | `profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
 | `profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
+| `profile.sh` | 78 层全量一轮：采集 + 解析 + 顺序归因 + 对比，结论来源 |
 | `profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |
-| `profile_l6.sh` | 6 层快跑：采集 + 解析 + 顺序归因 + 对比 |
-| `_profile_l6_common.json` | 6 层覆盖（`--hf-overrides`），其余继承 `_profile_common.json` |'
+| `profile_l6.sh` | 6 层快跑：只用于快速复看顺序与归因，不用于结论 |
+| `_profile_l6_common.json` | 6 层覆盖（`--hf-overrides`），其余继承 `_profile_common.json` |

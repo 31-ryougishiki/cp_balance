@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 一轮 profiling（6 层模型）：采集 -> 解析 -> 对比 + 算子顺序归因。
+# 6 层快跑：只用于快速复看算子顺序与归因，结论不取这一轮。
+# 结论（绝对耗时、rank 间失衡、净收益）一律来自 profile.sh 的 78 层四组。
 #
 #   bash profile_l6.sh                              # 默认四组，每组启动快很多
 #   bash profile_l6.sh prof_l6_cur_cp0 prof_l6_cur_cp1
