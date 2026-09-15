@@ -76,7 +76,10 @@ def analyse_root(root: Path, force: bool) -> None:
     except Exception as exc:  # noqa: BLE001 - already parsed data stays usable
         print("[analyse] torch_npu unavailable (%s); using existing CSVs" % exc)
         return
-    analyse(str(root) + "/")
+    try:
+        analyse(str(root) + "/")
+    except Exception as exc:  # noqa: BLE001 - other configs and any already\n        # parsed CSVs still matter, so report and keep going.
+        print("[analyse] parse failed for %s: %s" % (root, exc))
 
 
 def summarize_ops(out_dir: Path) -> dict:
@@ -226,10 +229,15 @@ def summarize_dir(root: Path, force: bool) -> dict:
     copied = copy_exports(root, ranks)
     print("[analyse] %d ranks -> %s" % (len(per_rank), out))
     for label, values in summary["digest"].items():
+        if not values:
+            print("[analyse] %-14s no data" % label)
+            continue
         print(
             "[analyse] %-14s max=%.1f mean=%.1f min=%.1f"
             % (label, values["max"], values["mean"], values["min"])
         )
+    if not per_rank:
+        print("[analyse] %s produced no usable rank output" % root)
     print("[analyse] export -> %s (%d files; download summary.json + %s/)" % (root / EXPORT_DIR, len(copied), EXPORT_DIR))
     return summary
 

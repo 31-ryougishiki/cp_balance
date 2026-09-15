@@ -110,9 +110,11 @@ def find_rank_dir(root: Path, wanted: str | None) -> Path:
     if not ranks:
         raise SystemExit("no *_ascend_pt under " + str(root))
     if wanted:
-        for path in ranks:
-            if wanted in path.name:
-                return path
+        # rank1 is a substring of rank10..rank15, so prefer the delimited form
+        for needle in (wanted + "_", wanted):
+            for path in ranks:
+                if needle in path.name:
+                    return path
         raise SystemExit("rank %r not in %s" % (wanted, [p.name for p in ranks]))
     return ranks[0]
 
@@ -313,35 +315,63 @@ def report_scopes(device_events: list, annotations: list, code_map: dict, top: i
         )
 
 
+def kernel_columns(header: list) -> dict:
+    lookup = {key.lower(): key for key in header}
+    return {
+        "step": lookup.get("step"),
+        "name": lookup.get("name") or lookup.get("type"),
+        "start": lookup.get("start time(us)") or lookup.get("start time"),
+        "dur": lookup.get("duration(us)") or lookup.get("duration"),
+    }
+
+
 def report_devices(rank_dir: Path, step: int, top: int) -> None:
+    """Ordered device kernels of one step; picks the busiest step when unsure.
+
+    The step numbering of kernel_details.csv is not part of any contract, so a
+    fixed --step can silently print nothing.  Count the rows per step first and
+    fall back to the busiest one instead.
+    """
     path = rank_dir / OUTPUT_DIR / "kernel_details.csv"
     if not path.is_file():
         log("[order] no kernel_details.csv, skipping device order")
         return
-    log("[order] device kernel order, step=%d (streaming %s)" % (step, path))
+    columns: dict = {}
+    counts: dict = {}
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        columns = kernel_columns(reader.fieldnames or [])
+        if not columns["step"] or not columns["name"] or not columns["dur"]:
+            log("[order] unexpected kernel_details.csv header: %s" % list(reader.fieldnames or []))
+            return
+        for row in reader:
+            key = str(row.get(columns["step"]))
+            counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        log("[order] kernel_details.csv is empty")
+        return
+    chosen = str(step)
+    if step < 0 or chosen not in counts:
+        busiest = max(counts.items(), key=lambda item: item[1])[0]
+        if step >= 0:
+            log("[order] step %s has no kernels (steps=%s); using step %s instead" % (step, sorted(counts)[:8], busiest))
+        chosen = busiest
     rows = []
     with open(path, newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
-        header = {key.lower(): key for key in (reader.fieldnames or [])}
-        step_col = header.get("step")
-        name_col = header.get("name") or header.get("type")
-        start_col = header.get("start time(us)") or header.get("start time")
-        dur_col = header.get("duration(us)") or header.get("duration")
-        if not step_col or not name_col or not dur_col:
-            log("[order] unexpected kernel_details.csv header: %s" % list(header))
-            return
         for row in reader:
-            if str(row.get(step_col)) != str(step):
+            if str(row.get(columns["step"])) != chosen:
                 continue
             rows.append(
                 {
-                    "name": str(row.get(name_col)),
-                    "dur": float(row.get(dur_col) or 0.0),
-                    "start": float(row.get(start_col) or 0.0) if start_col else 0.0,
+                    "name": str(row.get(columns["name"])),
+                    "dur": float(row.get(columns["dur"]) or 0.0),
+                    "start": float(row.get(columns["start"]) or 0.0) if columns["start"] else 0.0,
                 }
             )
     rows.sort(key=lambda item: item["start"])
     total = sum(row["dur"] for row in rows) or 1.0
+    log("[order] device kernel order, step=%s, %s" % (chosen, path))
     log("  %-5s %-52s %11s %10s %8s" % ("#", "kernel", "start_us", "dur_us", "share"))
     for index, row in enumerate(rows[:top], 1):
         log(
@@ -350,7 +380,7 @@ def report_devices(rank_dir: Path, step: int, top: int) -> None:
         )
     if len(rows) > top:
         log("  ... %d more kernels" % (len(rows) - top))
-    log("[order] step %d: kernels=%d busy=%.1fus (Start Time is relative to the step)" % (step, len(rows), total))
+    log("[order] step %s: kernels=%d busy=%.1fus (start time is relative to the step)" % (chosen, len(rows), total))
 
 
 def infer_repo(prof_dir: Path, explicit: str) -> Path | None:
@@ -375,7 +405,7 @@ def main() -> int:
     parser.add_argument("--repo", default="", help="code tree to map names to (default: from configs/)")
     parser.add_argument("--top", type=int, default=60, help="rows printed per table")
     parser.add_argument("--devices", action="store_true", help="print the device kernel order instead")
-    parser.add_argument("--step", type=int, default=1, help="step for --devices")
+    parser.add_argument("--step", type=int, default=-1, help="step for --devices (-1 = busiest)")
     parser.add_argument("--trim", action="store_true", help="also write order_<rank>.json")
     args = parser.parse_args()
 

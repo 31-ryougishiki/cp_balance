@@ -89,7 +89,7 @@ def wait_ready(port: int, proc, timeout: int) -> None:
     raise SystemExit("service not ready after %s seconds" % timeout)
 
 
-def wait_port_free(port: int, timeout: int = 120) -> None:
+def wait_port_free(port: int, timeout: int = 300) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -98,6 +98,17 @@ def wait_port_free(port: int, timeout: int = 120) -> None:
                 return
         time.sleep(2)
     raise SystemExit("port %s still busy" % port)
+
+
+def dir_size_mb(path: str) -> float:
+    total = 0
+    for item in Path(path).rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            pass
+    return total / 1e6
 
 
 def stop_service(proc: subprocess.Popen) -> None:
@@ -163,9 +174,14 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     log("[profile] service log -> %s" % log_path)
 
     prepare_dir(prof_dir)
+    before = {item.name for item in Path(prof_dir).rglob("*_ascend_pt") if item.is_dir()}
     wait_port_free(port)
     with open(log_path, "w", encoding="utf-8") as handle:
-        proc = subprocess.Popen(argv, env=env, stdout=handle, stderr=handle)
+        # start_new_session is mandatory: without it the child shares our
+        # process group and os.killpg below would signal this script too.
+        proc = subprocess.Popen(
+            argv, env=env, stdout=handle, stderr=handle, start_new_session=True
+        )
         try:
             wait_ready(port, proc, args.ready_timeout)
             for index in range(args.warmup):
@@ -200,7 +216,24 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
                 )
 
             code = post_empty(base + "/stop_profile", args.timeout)
-            log("[profile] profiler stopped rc=%s" % code)
+            if code != 200:
+                log("[profile] WARNING /stop_profile returned %s; the trace may be incomplete" % code)
+            else:
+                log("[profile] profiler stopped")
+            # torch_npu keeps flushing the trace after stop returns; killing the
+            # workers too early truncates or loses *_ascend_pt entirely.
+            time.sleep(args.settle)
+            # Count only the directories this run created; older runs of the same
+            # config live in the same tree and would mask a missing trace.
+            fresh = [
+                item
+                for item in Path(prof_dir).rglob("*_ascend_pt")
+                if item.is_dir() and item.name not in before
+            ]
+            log("[profile] settled %ss, %d new rank dirs, %.1f MB total" % (args.settle, len(fresh), dir_size_mb(prof_dir)))
+            expected = int(cfg.get("tp_size") or 1)
+            if len(fresh) < expected:
+                log("[profile] WARNING only %d of %d rank traces appeared; check the service log" % (len(fresh), expected))
         finally:
             stop_service(proc)
 
@@ -238,15 +271,25 @@ def main() -> int:
     parser.add_argument("--model", default="", help="served model name (default: questions.json hint)")
     parser.add_argument("--timeout", type=float, default=3600.0)
     parser.add_argument("--ready-timeout", type=int, default=1800)
+    parser.add_argument("--settle", type=int, default=45, help="seconds to let the trace flush after /stop_profile")
     args = parser.parse_args()
 
-    results = [run_config(name, args) for name in args.configs]
+    results = []
+    failed = []
+    for name in args.configs:
+        try:
+            results.append(run_config(name, args))
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - keep the other configs running
+            log("[profile] FAILED %s: %s" % (name, exc))
+            failed.append(str(name))
     log("[profile] ---- summary ----")
     for item in results:
         log(
             "[profile] %-24s cp_balance=%s mean_request=%ss dir=%s"
             % (item["config"], item["cp_balance"], item["mean_elapsed_s"], item["profiler_dir"])
         )
+    if failed:
+        log("[profile] FAILED configs: %s" % ", ".join(failed))
     log("[profile] next: python3 profile_analyse.py " + " ".join(item["profiler_dir"] for item in results))
     return 0
 

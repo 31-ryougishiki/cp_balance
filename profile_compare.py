@@ -25,7 +25,7 @@ TOP = 15
 def load(root: Path) -> dict:
     path = root / "summary.json"
     if not path.is_file():
-        raise SystemExit("missing %s; run profile_analyse.py first" % path)
+        raise FileNotFoundError("missing %s; run profile_analyse.py first" % path)
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -163,8 +163,12 @@ def main() -> int:
     for name in args.dirs:
         root = Path(name).resolve()
         label = root.name
+        try:
+            summaries.append(load(root))
+        except FileNotFoundError as exc:
+            print("[compare] SKIP %s: %s" % (label, exc))
+            return 1
         labels.append(label)
-        summaries.append(load(root))
         print("[compare] %s -> %s ranks=%d" % (label, root, summaries[-1].get("rank_count", 0)))
     print_spread(labels, summaries)
     print_ops(labels, summaries)
