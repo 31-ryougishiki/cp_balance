@@ -368,12 +368,18 @@ def main() -> int:
     base = Path(base_raw)
     out = Path(args.out) if args.out else Path.cwd() / ("round2_" + time.strftime("%m%d_%H%M"))
 
+    overrides = [
+        "%s=%s" % (name, os.environ[name])
+        for name in ("CP_BALANCE_LOCAL_IP", "CP_BALANCE_NIC_NAME", "CP_BALANCE_DEVICES")
+        if os.environ.get(name)
+    ]
     plan = [
         "steps            %s" % ",".join(sorted(steps)),
         "repo(cur)        %s  HEAD=%s" % (cur_raw, git_head(cur)),
         "repo(base)       %s  HEAD=%s%s"
         % (base_raw, git_head(base), "" if base_tree_ok(base) else "   <-- MISSING, steps 0/b_path and 2 will be skipped"),
         "out              %s" % out,
+        "env overrides    %s" % (", ".join(overrides) if overrides else "(none)"),
         "step 0           static gates: check_cp_balance_fields, check_b_path",
         "step 1           %s" % C_MATRIX,
         "step 2           %s" % B_MATRIX,
