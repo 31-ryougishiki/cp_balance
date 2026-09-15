@@ -300,6 +300,46 @@ python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 
 判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
 
+### 6 层快跑（推荐先跑这个）
+
+78 层每组启动约 10 分钟，调顺序和归因用不着全量。6 层由启动参数覆盖，不改模型目录：
+
+    bash profile_l6.sh
+
+`_profile_l6_common.json` 里 `--hf-overrides` 设 `num_hidden_layers=6`，并把
+`indexer_types` 按真实的 full/shared 周期裁成 6 项
+`[full, shared, shared, shared, full, shared]`。不裁的话前 6 层全是 full，而真实模型
+里多数层是 shared（`patch_deepseek_v2.py:57` 会跳过它们的 indexer），算子构成就失真了。
+这样仍然保留 3 个 dense + 3 个 MoE、2 个 full indexer。
+
+注意：6 层只能用来比“一层里各算子占多少”和“顺序”，不能拿来报绝对值——
+每步固定开销（metadata、embedding、出口 gather、logits）的占比会被放大。
+报绝对耗时仍用 `profile.sh` 的 78 层四组。
+
+### 算子调用顺序 + 对应代码
+
+    python3 profile_order.py prof_l6_cur_cp1 --rank rank0
+    python3 profile_order.py prof_l6_cur_cp1 --rank rank0 --devices
+    python3 profile_order.py prof_l6_cur_cp1 --rank rank0 --trim
+
+它流式读 `ASCEND_PROFILER_OUTPUT/trace_view.json`（不整文件加载），把主线程的 host 事件按时间
+排开，自动找出重复的层周期，打印三张表：
+
+- `head`：第一个完整层之前的非重复部分；
+- `one decoder-layer cycle`：一层里按顺序调了什么、各花多少、累计占比；
+- `cycle: share by name`：一层内按名字汇总的占比。
+
+每个名字后面跟 `<-` 加来源：`record_function` 标签直接给 `文件:行号`，
+`torch.ops.vllm.*` 给注册点，`Hccl*` 给对应集合通信原语的候选调用点。
+
+`--devices` 多给两张表：`device time by enclosing host scope` 把每个 device kernel 归到包住
+它的 host scope 上（同一份 trace，共用时钟），这是“耗时到底出在哪段代码”最直接的答案；
+再给指定 step 的 device kernel 顺序。
+
+前提是服务带了 `VLLM_CUSTOM_SCOPES_FOR_PROFILING=1`——没有它 `record_function` 会退化成
+nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间。`_profile_common.json` 已经设好了。
+`--trim` 会写一份 `order_<rank>.json`（几十 KB），回传这个就够，不用拉原始 trace。
+
 注意：profiling 配置里 `debug=0`（`[CP_BALANCE][plan]` 日志里有 `.tolist()`，会
 触发 device→host 同步）。"是否真的走 zigzag"请用 `check_branch.py` 在非采集的
 一轮里证明，不要靠 profiling 这一轮。
@@ -321,3 +361,6 @@ python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 | `profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
 | `profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
 | `profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
+| `profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |
+| `profile_l6.sh` | 6 层快跑：采集 + 解析 + 顺序归因 + 对比 |
+| `_profile_l6_common.json` | 6 层覆盖（`--hf-overrides`），其余继承 `_profile_common.json` |'

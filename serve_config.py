@@ -141,10 +141,18 @@ def build_argv(cfg: dict) -> list:
         argv += ["--served-model-name", *str(cfg["served_model_name"]).split()]
     if cfg.get("additional_config") is not None:
         argv += ["--additional_config", json.dumps(cfg["additional_config"], ensure_ascii=False)]
+    if cfg.get("hf_overrides"):
+        argv += ["--hf-overrides", json.dumps(cfg["hf_overrides"], ensure_ascii=False)]
     if (cfg.get("profiler") or {}).get("enabled"):
         argv += ["--profiler-config", json.dumps(profiler_payload(cfg), ensure_ascii=False)]
     argv += [str(item) for item in (cfg.get("server_args") or [])]
     return argv
+
+
+def layer_override(cfg: dict) -> str:
+    """``--hf-overrides`` layer count, or "all" for the real model."""
+    value = (cfg.get("hf_overrides") or {}).get("num_hidden_layers")
+    return str(int(value)) if value is not None else "all"
 
 
 def profiler_dir(cfg: dict) -> str:
@@ -181,7 +189,7 @@ def git_head(repo) -> str:
 def fingerprint(cfg: dict, env: dict) -> str:
     return (
         "[cp_balance] CONFIG=%s REPO=%s HEAD=%s MODEL=%s PORT=%s TP=%s NIC=%s IP=%s DEVICES=%s "
-        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s PROFILER=%s"
+        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s LAYERS=%s PROFILER=%s"
         % (
             cfg.get("name"),
             cfg.get("repo"),
@@ -197,6 +205,7 @@ def fingerprint(cfg: dict, env: dict) -> str:
             env.get("VLLM_ASCEND_CP_BALANCE_REDUCE_MODE"),
             env.get("VLLM_ASCEND_CP_BALANCE_DEBUG"),
             bool(cfg.get("deterministic")),
+            layer_override(cfg),
             profiler_dir(cfg) if (cfg.get("profiler") or {}).get("enabled") else "off",
         )
     )

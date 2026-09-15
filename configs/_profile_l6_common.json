@@ -1,0 +1,15 @@
+{
+  "extends": "_profile_common.json",
+  "name": "_profile_l6_common",
+  "hf_overrides": {
+    "num_hidden_layers": 6,
+    "indexer_types": [
+      "full",
+      "shared",
+      "shared",
+      "shared",
+      "full",
+      "shared"
+    ]
+  }
+}

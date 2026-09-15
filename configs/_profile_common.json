@@ -6,5 +6,8 @@
     "with_stack": false,
     "ignore_frontend": true
   },
-  "debug": 0
+  "debug": 0,
+  "env": {
+    "VLLM_CUSTOM_SCOPES_FOR_PROFILING": "1"
+  }
 }
