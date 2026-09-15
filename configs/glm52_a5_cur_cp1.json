@@ -1,0 +1,7 @@
+{
+  "extends": "_common_a5_mtp.json",
+  "name": "glm52_a5_cur_cp1",
+  "repo": "/home/z30055003/vllm-ascend",
+  "port": 8035,
+  "cp_balance": 1
+}

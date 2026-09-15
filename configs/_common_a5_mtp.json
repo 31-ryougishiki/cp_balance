@@ -1,0 +1,9 @@
+{
+  "extends": "_common_a5.json",
+  "name": "_common_a5_mtp",
+  "speculative_config": {
+    "num_speculative_tokens": 1,
+    "method": "deepseek_mtp",
+    "enforce_eager": true
+  }
+}

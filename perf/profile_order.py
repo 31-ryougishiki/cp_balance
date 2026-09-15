@@ -468,7 +468,7 @@ def infer_repo(prof_dir: Path, explicit: str) -> Path | None:
         except ValueError:
             continue
         configured = (data.get("profiler") or {}).get("dir")
-        if configured and Path(str(configured)) == prof_dir:
+        if configured and Path(str(configured)).resolve() == prof_dir:
             return Path(data["repo"]) if data.get("repo") else None
     fallback = Path("/opt/its/z30055003/vllm-ascend")
     return fallback if fallback.is_dir() else None

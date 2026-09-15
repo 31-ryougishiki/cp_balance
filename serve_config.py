@@ -143,6 +143,8 @@ def build_argv(cfg: dict) -> list:
         argv += ["--additional_config", json.dumps(cfg["additional_config"], ensure_ascii=False)]
     if cfg.get("hf_overrides"):
         argv += ["--hf-overrides", json.dumps(cfg["hf_overrides"], ensure_ascii=False)]
+    if cfg.get("speculative_config") is not None:
+        argv += ["--speculative-config", json.dumps(cfg["speculative_config"], ensure_ascii=False)]
     if (cfg.get("profiler") or {}).get("enabled"):
         argv += ["--profiler-config", json.dumps(profiler_payload(cfg), ensure_ascii=False)]
     argv += [str(item) for item in (cfg.get("server_args") or [])]
@@ -194,10 +196,18 @@ def git_head(repo) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else "unknown"
 
 
+def spec_summary(cfg: dict) -> str:
+    spec = cfg.get("speculative_config")
+    if not spec:
+        return "off"
+    return "%s/%s" % (spec.get("method", "?"), spec.get("num_speculative_tokens", "?"))
+
+
 def fingerprint(cfg: dict, env: dict) -> str:
     return (
         "[cp_balance] CONFIG=%s REPO=%s HEAD=%s MODEL=%s PORT=%s TP=%s NIC=%s IP=%s DEVICES=%s "
-        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s LAYERS=%s PROFILER=%s"
+        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s LAYERS=%s PROFILER=%s "
+        "PRELUDE=%s SPEC=%s"
         % (
             cfg.get("name"),
             cfg.get("repo"),
@@ -215,6 +225,8 @@ def fingerprint(cfg: dict, env: dict) -> str:
             bool(cfg.get("deterministic")),
             layer_override(cfg),
             profiler_dir(cfg) if (cfg.get("profiler") or {}).get("enabled") else "off",
+            bool(cfg.get("prelude")),
+            spec_summary(cfg),
         )
     )
 
@@ -232,6 +244,12 @@ def main() -> int:
         apply_set(cfg, expr)
     env = build_env(cfg)
     argv = build_argv(cfg)
+    prelude = cfg.get("prelude")
+    if prelude:
+        # prelude is a shell snippet that must run before the server, e.g.
+        # "source /path/set_env.bash".  exec keeps the wrapper pid so the
+        # harness can still stop the whole process group.
+        argv = ["bash", "-c", str(prelude) + " && exec " + shlex.join(argv)]
     print(fingerprint(cfg, env), flush=True)
     if args.dry_run:
         if args.print_env:

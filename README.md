@@ -371,6 +371,22 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 触发 device→host 同步）。"是否真的走 zigzag"请用 `check_branch.py` 在非采集的
 一轮里证明，不要靠 profiling 这一轮。
 
+## A5 环境（8 卡，GLM-5.2-w4a4c8-mxfp4）
+
+A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传清单见 `docs/a5_test_plan.md`。
+一条命令：
+
+```bash
+bash accuracy/round2_verify_a5.sh     # 精度：静态门控 + C 验收 + B 等价性 + 可选 A/B
+bash perf/profile_a5.sh               # 性能：cp0 / cp1 / cp0_repeat / base_cp0 四组
+```
+
+A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.133.112、
+`/mnt/share/weights/GLM-5.2-w4a4c8-mxfp4`、vendor 环境用 `prelude` 字段承载），
+`configs/_common_a5_mtp.json` 在其之上打开 MTP（deepseek_mtp, 1 token）：精度组用它，性能组不用。
+两处需要按现场确认：base 代码树路径（默认 `/home/z30055003/vllm-ascend-base`）与
+`cp_balance` 仓库位置（脚本假定在当前目录运行）。
+
 ## 文件
 
 | 文件 | 作用 |
@@ -384,6 +400,11 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 | `accuracy/check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
 | `accuracy/check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
 | `accuracy/run_matrix.sh` | `run_matrix.py` 的入口包装 |
+| `accuracy/round2_verify_a5.sh` | 本轮验收，换 A5 的矩阵/端口/代码树 |
+| `perf/profile_a5.sh` | A5 全量性能采集（78 层四组 + 噪声地板 + 解析 + 算子归因） |
+| `configs/_common_a5.json` / `_common_a5_mtp.json` | A5 公共参数（后者额外打开 MTP） |
+| `configs/matrix_a5_*.json` | A5 的两套矩阵（C 验收、B 等价性） |
+| `accuracy/round2_verify.py` / `.sh` | 本轮验收一键跑：静态门控 + C 验收 + B 等价性 + 可选 A/B（临时补丁自动还原，产物在 `round2_<时间戳>/`） |
 | `perf/profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
 | `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
 | `perf/profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |

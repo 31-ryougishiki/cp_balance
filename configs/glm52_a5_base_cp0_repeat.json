@@ -1,0 +1,7 @@
+{
+  "extends": "_common_a5_mtp.json",
+  "name": "glm52_a5_base_cp0_repeat",
+  "repo": "/home/z30055003/vllm-ascend-base",
+  "port": 8037,
+  "cp_balance": 0
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "_profile_a5_common.json",
+  "name": "prof_a5_cur_cp0_repeat",
+  "repo": "/home/z30055003/vllm-ascend",
+  "port": 8088,
+  "cp_balance": 0,
+  "profiler": {
+    "dir": "prof_a5_cur_cp0_repeat"
+  }
+}
