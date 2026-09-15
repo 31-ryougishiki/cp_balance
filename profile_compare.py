@@ -3,14 +3,19 @@
 
     python3 profile_compare.py prof_cur_cp0 prof_cur_cp1
 
-Prints, side by side:
+One config now produces one capture window per prompt length, so the primary
+table is per length, side by side:
 
-* per-rank operator time spread (cp_balance is a balancing change, so the
-  max/mean gap across ranks is the first thing to look at);
-* the per-operator composition difference (which kernel got cheaper / more
-  expensive when zigzag is on);
-* the collective (HCCL) time and call count, which is what the owner
-  independent reduction adds.
+* attn/ref is the attention time divided by the MoE expert dispatch time.  The
+  dispatch does exactly the same work in every config and cp_balance never
+  touches it, so it acts as a clock: run-to-run machine drift cancels and only
+  the attention change survives.  Without it the previous round showed 12%
+  between two configs that run the same code path.
+* clean_s is the same request measured with the profiler off, i.e. the only
+  honest end-to-end number; profiled_s shows what profiling itself costs.
+
+Then the per-operator composition, aggregated over all windows, and the
+collective time and call counts.
 """
 
 from __future__ import annotations
@@ -29,129 +34,138 @@ def load(root: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def windows_of(summary: dict) -> dict:
+    """label -> window info, falling back to the window id when unlabelled."""
+    out = {}
+    for window, info in (summary.get("windows") or {}).items():
+        label = info.get("label") or ("window_%s" % window[-6:])
+        out[label] = info
+    if not out and summary.get("ranks"):
+        out["all"] = {"rank_count": summary.get("rank_count"), "digest": summary.get("digest", {}), "ranks": summary["ranks"]}
+    return out
+
+
+def window_metric(info: dict, key: str) -> float:
+    values = info.get("digest", {}).get(key) or {}
+    return float(values.get("mean") or 0.0)
+
+
+def window_ratio(info: dict) -> float:
+    ref = window_metric(info, "reference_us")
+    if ref <= 0:
+        return 0.0
+    return window_metric(info, "attention_us") / ref
+
+
+def order_labels(a: dict, b: dict) -> list:
+    def size(label: str) -> int:
+        for source in (a, b):
+            target = source.get(label)
+            if target and target.get("target_tokens"):
+                return int(target["target_tokens"])
+        return 10 ** 9
+    return sorted(set(a) | set(b), key=size)
+
+
+def print_lengths(labels: list, summaries: list) -> None:
+    windows = [windows_of(summary) for summary in summaries]
+    print("[compare] per-length windows (values are the mean over ranks)")
+    header = "  %-10s %9s %6s" % ("length", "tokens", "steps")
+    for label in labels:
+        header += " | %-11s %11s %11s %9s %9s" % (label + " attn/ref", "attn_us", "op_total_us", "profiled_s", "clean_s")
+    print(header)
+    for length in order_labels(windows[0], windows[1] if len(windows) > 1 else windows[0]):
+        info0 = next((w.get(length) for w in windows if w.get(length)), None)
+        if info0 is None:
+            continue
+        audit = info0.get("audit") or {}
+        row = "  %-10s %9s %6s" % (length, info0.get("prompt_tokens"), audit.get("kernel_steps"))
+        for source in windows:
+            info = source.get(length)
+            if info is None:
+                row += " | %-11s %11s %11s %9s %9s" % ("-", "-", "-", "-", "-")
+                continue
+            row += " | %-11.5f %11.1f %11.1f %9s %9s" % (
+                window_ratio(info),
+                window_metric(info, "attention_us"),
+                window_metric(info, "op_total_us"),
+                ("%.3f" % info["wall_s"]) if info.get("wall_s") else "-",
+                ("%.3f" % info["clean_wall_s"]) if info.get("clean_wall_s") else "-",
+            )
+        print(row)
+
+
+def print_length_delta(labels: list, summaries: list) -> None:
+    if len(summaries) != 2:
+        return
+    left, right = (windows_of(summary) for summary in summaries)
+    print("[compare] per-length delta %s -> %s (attn/ref cancels machine drift)" % tuple(labels[:2]))
+    print("  %-10s %12s %12s %10s | %12s %12s %10s" % ("length", "A attn/ref", "B attn/ref", "delta%", "A clean_s", "B clean_s", "delta%"))
+    for length in order_labels(left, right):
+        a, b = left.get(length), right.get(length)
+        if not a or not b:
+            continue
+        ra, rb = window_ratio(a), window_ratio(b)
+        ca, cb = a.get("clean_wall_s"), b.get("clean_wall_s")
+        ratio = ("%+.1f%%" % (100.0 * (rb / ra - 1))) if ra > 0 and rb > 0 else "-"
+        clean = ("%+.1f%%" % (100.0 * (cb / ca - 1))) if ca and cb else "-"
+        print(
+            "  %-10s %12.5f %12.5f %10s | %12s %12s %10s"
+            % (length, ra, rb, ratio, "%.3f" % ca if ca else "-", "%.3f" % cb if cb else "-", clean)
+        )
+
+
 def rank_union(summary: dict, field: str) -> dict:
-    totals: dict[str, float] = {}
-    for payload in summary["ranks"].values():
-        for item in payload.get(field, []):
-            totals[item["name"]] = totals.get(item["name"], 0.0) + item["total_us"]
+    totals = {}
+    for info in (summary.get("windows") or {}).values():
+        for payload in info.get("ranks", {}).values():
+            for item in payload.get(field, []):
+                totals[item["name"]] = totals.get(item["name"], 0.0) + item["total_us"]
+    if not totals:
+        for payload in (summary.get("ranks") or {}).values():
+            for item in payload.get(field, []):
+                totals[item["name"]] = totals.get(item["name"], 0.0) + item["total_us"]
     return totals
 
 
 def rank_union_count(summary: dict, field: str) -> dict:
-    totals: dict[str, int] = {}
-    for payload in summary["ranks"].values():
-        for item in payload.get(field, []):
-            totals[item["name"]] = totals.get(item["name"], 0) + (item["count"] or 0)
+    totals = {}
+    for info in (summary.get("windows") or {}).values():
+        for payload in info.get("ranks", {}).values():
+            for item in payload.get(field, []):
+                totals[item["name"]] = totals.get(item["name"], 0) + (item["count"] or 0)
+    if not totals:
+        for payload in (summary.get("ranks") or {}).values():
+            for item in payload.get(field, []):
+                totals[item["name"]] = totals.get(item["name"], 0) + (item["count"] or 0)
     return totals
 
 
-def print_spread(labels: list[str], summaries: list[dict]) -> None:
-    metrics = (
-        ("step_computing_us", "per-rank step Computing (max over steps)"),
-        ("step_comm_us", "per-rank step Communication (max over steps)"),
-        ("op_total_us", "per-rank operator time over the whole window"),
-        ("comm_total_us", "per-rank collective time"),
-        ("comm_calls", "per-rank collective call count"),
-    )
-    for key, title in metrics:
-        if not all(summary["digest"].get(key) for summary in summaries):
-            continue
-        print("[compare] %s" % title)
-        print("  %-18s %12s %12s %12s %10s" % ("dir", "max", "mean", "min", "max/mean"))
-        for label, summary in zip(labels, summaries):
-            values = summary["digest"][key]
-            print(
-                "  %-18s %12.1f %12.1f %12.1f %10.3f"
-                % (label, values["max"], values["mean"], values["min"], values["max"] / max(values["mean"], 1e-9))
-            )
-
-
-def print_ops(labels: list[str], summaries: list[dict]) -> None:
+def print_ops(labels: list, summaries: list, top: int = TOP) -> None:
     tables = [rank_union(summary, "ops") for summary in summaries]
-    names = sorted(set().union(*[set(table) for table in tables]), key=lambda name: -max(t.get(name, 0.0) for t in tables))
-    print("[compare] operator time over all ranks, top %d by max" % TOP)
-    print("  %-52s %s" % ("op", " ".join("%12s" % label for label in labels)))
-    for name in names[:TOP]:
-        print(
-            "  %-52s %s"
-            % (name[:52], " ".join("%12.1f" % table.get(name, 0.0) for table in tables))
-        )
-    print("[compare] operator call count over all ranks")
+    names = sorted(set().union(*[set(t) for t in tables]), key=lambda n: -max(t.get(n, 0.0) for t in tables))
+    print("[compare] operator time over all ranks and windows, top %d by max" % top)
+    print("  %-42s %s" % ("op", " ".join("%14s" % label for label in labels)))
+    for name in names[:top]:
+        print("  %-42s %s" % (name[:42], " ".join("%14.0f" % table.get(name, 0.0) for table in tables)))
     counts = [rank_union_count(summary, "ops") for summary in summaries]
-    print("  %-52s %s" % ("op", " ".join("%12s" % label for label in labels)))
-    for name in names[:TOP]:
-        print(
-            "  %-52s %s"
-            % (name[:52], " ".join("%12d" % table.get(name, 0) for table in counts))
-        )
+    print("[compare] operator call count over all ranks and windows")
+    print("  %-42s %s" % ("op", " ".join("%14s" % label for label in labels)))
+    for name in names[:top]:
+        print("  %-42s %s" % (name[:42], " ".join("%14d" % table.get(name, 0) for table in counts)))
 
 
-def print_comm(labels: list[str], summaries: list[dict]) -> None:
+def print_comm(labels: list, summaries: list) -> None:
     tables = [rank_union(summary, "comm") for summary in summaries]
     counts = [rank_union_count(summary, "comm") for summary in summaries]
-    names = sorted(set().union(*[set(table) for table in tables]), key=lambda name: -max(t.get(name, 0.0) for t in tables))
-    print("[compare] collective time / count over all ranks")
-    print("  %-44s %s" % ("op", " ".join("%19s" % label for label in labels)))
+    names = sorted(set().union(*[set(t) for t in tables]), key=lambda n: -max(t.get(n, 0.0) for t in tables))
+    if not names:
+        return
+    print("[compare] collective time / count over all ranks and windows")
+    print("  %-40s %s" % ("op", " ".join("%19s" % label for label in labels)))
     for name in names:
-        cells = " ".join("%9.1f/%-8d" % (table.get(name, 0.0), count.get(name, 0)) for table, count in zip(tables, counts))
-        print("  %-44s %s" % (name[:44], cells))
-
-
-def print_delta(labels: list[str], summaries: list[dict]) -> None:
-    if len(summaries) != 2:
-        return
-    base = rank_union(summaries[0], "ops")
-    new = rank_union(summaries[1], "ops")
-    rows = []
-    for name in sorted(set(base) | set(new), key=lambda key: -abs(new.get(key, 0.0) - base.get(key, 0.0))):
-        before, after = base.get(name, 0.0), new.get(name, 0.0)
-        rows.append((name, before, after, after - before, (after / before - 1) * 100 if before else float("inf")))
-    print("[compare] delta %s -> %s (all ranks, us)" % (labels[0], labels[1]))
-    print("  %-44s %12s %12s %12s %9s" % ("op", labels[0], labels[1], "delta", "delta%"))
-    for name, before, after, diff, pct in rows[:TOP]:
-        print("  %-44s %12.1f %12.1f %+12.1f %9.1f" % (name[:44], before, after, diff, pct))
-
-
-def step_table(summary: dict) -> list[tuple]:
-    """Normalize step_trace_time rows to (step, computing, comm, overlapped, free)."""
-    if not summary.get("ranks"):
-        return []
-    rank = sorted(summary["ranks"])[0]
-    rows = summary["ranks"][rank].get("steps") or []
-    table = []
-    for row in rows:
-        def find(*hints, exclude=()):
-            for key, value in row.items():
-                low = key.lower()
-                if any(hint in low for hint in hints) and not any(bad in low for bad in exclude):
-                    return value
-            return ""
-        step = find("step")
-        if step == "":
-            continue
-        table.append(
-            (
-                step,
-                find("computing"),
-                find("communication"),
-                find("overlap", exclude=("not",)),
-                find("free"),
-            )
-        )
-    return table
-
-
-def print_steps(labels: list[str], summaries: list[dict]) -> None:
-    tables = [step_table(summary) for summary in summaries]
-    if not any(tables):
-        return
-    print("[compare] step_trace_time of the lowest-rank worker (us)")
-    for label, summary, table in zip(labels, summaries, tables):
-        rank = sorted(summary["ranks"])[0] if summary.get("ranks") else "?"
-        print("  %s rank=%s" % (label, rank))
-        print("    %6s %14s %14s %14s %14s" % ("step", "computing", "comm", "overlapped", "free"))
-        for row in table[:16]:
-            print("    %6s %14s %14s %14s %14s" % row)
+        cells = " ".join("%9.0f/%-8d" % (table.get(name, 0.0), count.get(name, 0)) for table, count in zip(tables, counts))
+        print("  %-40s %s" % (name[:40], cells))
 
 
 def main() -> int:
@@ -169,12 +183,11 @@ def main() -> int:
             print("[compare] SKIP %s: %s" % (label, exc))
             return 1
         labels.append(label)
-        print("[compare] %s -> %s ranks=%d" % (label, root, summaries[-1].get("rank_count", 0)))
-    print_spread(labels, summaries)
+        print("[compare] %s -> %s windows=%d" % (label, root, len(summaries[-1].get("windows") or {})))
+    print_lengths(labels, summaries)
+    print_length_delta(labels, summaries)
     print_ops(labels, summaries)
     print_comm(labels, summaries)
-    print_delta(labels, summaries)
-    print_steps(labels, summaries)
     return 0
 
 

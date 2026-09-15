@@ -42,6 +42,7 @@ LABEL_PATTERNS = (
     re.compile(r'_sfa_5_3_scope\(\s*"([^"]+)"'),
 )
 CUSTOM_OP_PATTERN = re.compile(r'op_name="([^"]+)"')
+WINDOW_RE = re.compile(r"_(\d{17})_ascend_pt$")
 COLLECTIVES = (
     "all_gather_async",
     "all_gather_into_tensor",
@@ -105,10 +106,39 @@ def iter_trace_events(path: Path):
                 yield event
 
 
-def find_rank_dir(root: Path, wanted: str | None) -> Path:
+def longest_window(root: Path) -> str:
+    """Window label with the largest target prompt, from windows.json."""
+    path = root / "windows.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return ""
+    best, best_target = "", -1
+    for entry in data.get("entries") or []:
+        target = int(entry.get("target_tokens") or 0)
+        if target > best_target:
+            for window in entry.get("window_ids") or []:
+                best, best_target = str(window), target
+    return best
+
+
+def find_rank_dir(root: Path, wanted: str | None, window: str | None = None) -> Path:
     ranks = [path for path in sorted(root.rglob("*_ascend_pt")) if path.is_dir()]
+    stamps = {m.group(1) for m in (WINDOW_RE.search(path.name) for path in ranks) if m}
+    if not window and not wanted and len(stamps) > 1:
+        # Several capture windows: attribute the longest prompt by default, it is
+        # the one where attention matters most relative to the fixed costs.
+        window = longest_window(root) or ""
+    if window:
+        ranks = [path for path in ranks if window in path.name]
+        if not ranks:
+            raise SystemExit("window %r not under %s" % (window, root))
     if not ranks:
         raise SystemExit("no *_ascend_pt under " + str(root))
+    if not wanted and window:
+        wanted = "rank0_"
     if wanted:
         # rank1 is a substring of rank10..rank15, so prefer the delimited form
         for needle in (wanted + "_", wanted):
@@ -402,6 +432,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("profiler_dir", help="directory printed by profile_forward.py")
     parser.add_argument("--rank", default="", help="substring of the rank directory (default: first)")
+    parser.add_argument(
+        "--window",
+        default="",
+        help="capture window id (the 17-digit stamp in the rank dir name), one per prompt length",
+    )
     parser.add_argument("--repo", default="", help="code tree to map names to (default: from configs/)")
     parser.add_argument("--top", type=int, default=60, help="rows printed per table")
     parser.add_argument("--devices", action="store_true", help="print the device kernel order instead")
@@ -410,7 +445,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.profiler_dir).resolve()
-    rank_dir = find_rank_dir(root, args.rank or None)
+    rank_dir = find_rank_dir(root, args.rank or None, args.window or None)
     log("[order] rank_dir=%s" % rank_dir)
     repo = infer_repo(root, args.repo)
     code_map = scan_repo(repo) if repo and repo.is_dir() else {"labels": {}, "ops": {}, "collectives": {}}

@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
-"""Collect one profiling trace per config for the prefill forward.
+"""Collect one profiling window per prompt length, prefill only.
 
-    python3 profile_forward.py glm52_cur_cp0_prof glm52_cur_cp1_prof
+    python3 profile_forward.py prof_cur_cp1
 
-For every config the script starts the service, sends ``--warmup`` long
-requests to pay the one-time costs (HCCL setup, metadata caches, MoE
-workspace), then ``POST /start_profile``, ``--requests`` long requests,
-``POST /stop_profile``, stops the service and writes ``prof_<name>.json``.
+Per config the script starts the service once and then, for every length in the
+config's "lengths" list, runs one round:
 
-The config must set ``"profiler": {"enabled": true}``: ``/start_profile`` only
-exists when the service was launched with ``--profiler-config``.
+    warmup request (unprofiled) -> POST /start_profile -> one request with
+    max_completion_tokens=1 -> POST /stop_profile -> settle
 
-Requests are sent one at a time, so each one is its own prefill batch and the
-two runs have identical batch shapes.
+The profiler config carries delay_iterations=0 / max_iterations=1, so the window
+holds one prefill step and at most one decode step instead of everything that
+happens until /stop_profile arrives.  That matters: with an unbounded window the
+previous round captured roughly 64 steps for 4 requests, and the composition was
+dominated by decode, which cp_balance does not touch at all.
+
+Prompts are built deterministically from questions.json and measured with
+/tokenize, so the same target length produces the same prompt in every config.
+
+Everything the later stages need lands in <profiler_dir>/windows.json: which
+length each window belongs to, the real prompt token count, the window id (the
+timestamp inside the rank directory name) and the client wall time, both with
+profiling on and during the unprofiled second pass.
+
+Configs without "lengths" keep the old single-window behaviour.
 """
 
 from __future__ import annotations
@@ -21,6 +32,7 @@ import argparse
 import io
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -32,6 +44,7 @@ from pathlib import Path
 import serve_config
 
 HERE = Path(__file__).resolve().parent
+WINDOW_RE = re.compile(r"_(\d{17})_ascend_pt$")
 
 
 def log(message: str) -> None:
@@ -44,13 +57,36 @@ def prepare_dir(path: str) -> None:
     os.chmod(path, 0o755)
 
 
-def load_cases(kind: str) -> tuple[list[dict], str]:
+def dir_size_mb(path: str) -> float:
+    total = 0
+    for item in Path(path).rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            pass
+    return total / 1e6
+
+
+def load_cases(kind: str) -> tuple:
     payload = json.loads(io.open(HERE / "questions.json", encoding="utf-8").read())
     items = list(payload.get("items") or payload)
     cases = [item for item in items if str(item.get("kind") or "") == kind]
     if not cases:
         raise SystemExit("no cases of kind " + kind)
     return cases, str(payload.get("model") or "")
+
+
+def source_text(cases: list) -> str:
+    """One long deterministic body to slice prompts out of."""
+    parts = []
+    for case in cases:
+        text = str(case.get("article") or case.get("prompt") or "")
+        if text:
+            parts.append(text)
+    if not parts:
+        raise SystemExit("questions.json has no article text to build prompts from")
+    return "\n".join(parts)
 
 
 def post_json(url: str, payload: dict, timeout: float) -> dict:
@@ -100,17 +136,6 @@ def wait_port_free(port: int, timeout: int = 300) -> None:
     raise SystemExit("port %s still busy" % port)
 
 
-def dir_size_mb(path: str) -> float:
-    total = 0
-    for item in Path(path).rglob("*"):
-        try:
-            if item.is_file():
-                total += item.stat().st_size
-        except OSError:
-            pass
-    return total / 1e6
-
-
 def stop_service(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
@@ -130,6 +155,37 @@ def stop_service(proc: subprocess.Popen) -> None:
         except (ProcessLookupError, PermissionError, OSError):
             pass
     time.sleep(5)
+
+
+def count_tokens(base: str, model: str, text: str, timeout: float) -> int:
+    try:
+        payload = post_json(base + "/tokenize", {"model": model, "prompt": text}, timeout)
+    except Exception as exc:  # noqa: BLE001 - fall back to the character estimate
+        log("[profile] /tokenize unavailable (%s), using a character estimate" % exc)
+        return 0
+    return int(payload.get("count") or 0)
+
+
+def make_prompt(base: str, model: str, target: int, source: str, timeout: float) -> tuple:
+    """Smallest prefix of the repeated source whose token count reaches target."""
+    body = source
+    while len(body) < max(target * 4, 8192):
+        body += "\n" + source
+    if count_tokens(base, model, body[:64], timeout) == 0:
+        chars = min(len(body), int(target))
+        return body[:chars], target
+    low, high, best = 1, len(body), None
+    while low <= high:
+        mid = (low + high) // 2
+        found = count_tokens(base, model, body[:mid], timeout)
+        if found >= target:
+            best = (mid, found)
+            high = mid - 1
+        else:
+            low = mid + 1
+    if best is None:
+        return body, count_tokens(base, model, body, timeout)
+    return body[: best[0]], best[1]
 
 
 def send_one(endpoint: str, model: str, prompt: str, max_tokens: int, timeout: float) -> dict:
@@ -154,12 +210,25 @@ def send_one(endpoint: str, model: str, prompt: str, max_tokens: int, timeout: f
     }
 
 
+def window_ids(prof_dir: str, before: set) -> list:
+    found = []
+    for item in sorted(Path(prof_dir).rglob("*_ascend_pt")):
+        if not item.is_dir() or item.name in before:
+            continue
+        match = WINDOW_RE.search(item.name)
+        if match:
+            found.append(match.group(1))
+    return sorted(set(found))
+
+
+def snapshot(prof_dir: str) -> set:
+    return {item.name for item in Path(prof_dir).rglob("*_ascend_pt") if item.is_dir()}
+
+
 def run_config(name: str, args: argparse.Namespace) -> dict:
     cfg = serve_config.load_config(name)
     if not (cfg.get("profiler") or {}).get("enabled"):
-        raise SystemExit(
-            "config %s must set \"profiler\": {\"enabled\": true}" % name
-        )
+        raise SystemExit('config %s must set "profiler": {"enabled": true}' % name)
     prof_dir = serve_config.profiler_dir(cfg)
     env = serve_config.build_env(cfg)
     argv = serve_config.build_argv(cfg)
@@ -170,108 +239,145 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     model = args.model or model_hint or "glm-52"
     base = "http://127.0.0.1:%s" % port
     endpoint = base + args.endpoint
+    lengths = [int(x) for x in (cfg.get("lengths") or [])]
     log_path = HERE / ("profile_%s.log" % cfg["name"])
     log("[profile] service log -> %s" % log_path)
 
     prepare_dir(prof_dir)
-    before = {item.name for item in Path(prof_dir).rglob("*_ascend_pt") if item.is_dir()}
+    before = snapshot(prof_dir)
     wait_port_free(port)
+
+    entries = []
     with open(log_path, "w", encoding="utf-8") as handle:
-        # start_new_session is mandatory: without it the child shares our
-        # process group and os.killpg below would signal this script too.
-        proc = subprocess.Popen(
-            argv, env=env, stdout=handle, stderr=handle, start_new_session=True
-        )
+        proc = subprocess.Popen(argv, env=env, stdout=handle, stderr=handle, start_new_session=True)
         try:
             wait_ready(port, proc, args.ready_timeout)
-            for index in range(args.warmup):
-                case = cases[index % len(cases)]
-                result = send_one(
-                    endpoint, model, case["prompt"], args.max_completion_tokens, args.timeout
-                )
-                log("[profile] warmup %d/%d %ss" % (index + 1, args.warmup, result["elapsed_s"]))
 
-            code = post_empty(base + "/start_profile", args.timeout)
-            if code != 200:
-                raise SystemExit("/start_profile returned %s" % code)
-            log("[profile] profiler started")
-
-            samples = []
-            for index in range(args.requests):
-                case = cases[index % len(cases)]
-                result = send_one(
-                    endpoint, model, case["prompt"], args.max_completion_tokens, args.timeout
-                )
-                result["id"] = case.get("id")
-                samples.append(result)
-                log(
-                    "[profile] req %d/%d id=%s %ss prompt_tokens=%s"
-                    % (
-                        index + 1,
-                        args.requests,
-                        result["id"],
-                        result["elapsed_s"],
-                        result["prompt_tokens"],
+            if lengths:
+                body = source_text(cases)
+                for target in lengths:
+                    prompt, tokens = make_prompt(base, model, target, body, args.timeout)
+                    warm = send_one(endpoint, model, prompt, 1, args.timeout)
+                    log(
+                        "[profile] len=%-6d warmup tokens=%s wall=%.2fs"
+                        % (target, warm["prompt_tokens"], warm["elapsed_s"])
                     )
+                    code = post_empty(base + "/start_profile", args.timeout)
+                    if code != 200:
+                        raise SystemExit("/start_profile returned %s" % code)
+                    result = send_one(endpoint, model, prompt, 1, args.timeout)
+                    stop_rc = post_empty(base + "/stop_profile", args.timeout)
+                    time.sleep(args.settle)
+                    ids = window_ids(prof_dir, before)
+                    before = snapshot(prof_dir)
+                    entries.append(
+                        {
+                            "label": "len%d" % target,
+                            "target_tokens": target,
+                            "prompt_tokens": result["prompt_tokens"],
+                            "tokenized": tokens,
+                            "wall_s": result["elapsed_s"],
+                            "stop_rc": stop_rc,
+                            "window_ids": ids,
+                            "completion_tokens": result["completion_tokens"],
+                        }
+                    )
+                    log(
+                        "[profile] len=%-6d tokens=%s stop=%s window=%s wall=%.2fs"
+                        % (target, result["prompt_tokens"], stop_rc, ids, result["elapsed_s"])
+                    )
+
+                if args.clean_pass:
+                    # Same ladder again with the profiler off: the only honest
+                    # end-to-end numbers, and the reference the profiled pass is
+                    # inflated against.
+                    for entry in entries:
+                        prompt, _ = make_prompt(base, model, entry["target_tokens"], body, args.timeout)
+                        clean = send_one(endpoint, model, prompt, 1, args.timeout)
+                        entry["clean_wall_s"] = clean["elapsed_s"]
+                        entry["clean_prompt_tokens"] = clean["prompt_tokens"]
+                        log(
+                            "[profile] len=%-6d clean wall=%.3fs (profiled %.3fs)"
+                            % (entry["target_tokens"], clean["elapsed_s"], entry["wall_s"])
+                        )
+            else:
+                for index in range(args.warmup):
+                    case = cases[index % len(cases)]
+                    warm = send_one(endpoint, model, case["prompt"], args.max_completion_tokens, args.timeout)
+                    log("[profile] warmup %d/%d %.2fs" % (index + 1, args.warmup, warm["elapsed_s"]))
+                code = post_empty(base + "/start_profile", args.timeout)
+                if code != 200:
+                    raise SystemExit("/start_profile returned %s" % code)
+                samples = []
+                for index in range(args.requests):
+                    case = cases[index % len(cases)]
+                    result = send_one(endpoint, model, case["prompt"], args.max_completion_tokens, args.timeout)
+                    result["id"] = case.get("id")
+                    samples.append(result)
+                    log("[profile] req %d/%d %.2fs" % (index + 1, args.requests, result["elapsed_s"]))
+                stop_rc = post_empty(base + "/stop_profile", args.timeout)
+                time.sleep(args.settle)
+                entries.append(
+                    {
+                        "label": "all",
+                        "target_tokens": None,
+                        "prompt_tokens": samples[0]["prompt_tokens"] if samples else None,
+                        "wall_s": round(sum(s["elapsed_s"] for s in samples) / max(len(samples), 1), 4),
+                        "stop_rc": stop_rc,
+                        "window_ids": window_ids(prof_dir, before),
+                        "samples": samples,
+                    }
                 )
 
-            code = post_empty(base + "/stop_profile", args.timeout)
-            if code != 200:
-                log("[profile] WARNING /stop_profile returned %s; the trace may be incomplete" % code)
-            else:
-                log("[profile] profiler stopped")
-            # torch_npu keeps flushing the trace after stop returns; killing the
-            # workers too early truncates or loses *_ascend_pt entirely.
-            time.sleep(args.settle)
-            # Count only the directories this run created; older runs of the same
-            # config live in the same tree and would mask a missing trace.
-            fresh = [
-                item
-                for item in Path(prof_dir).rglob("*_ascend_pt")
-                if item.is_dir() and item.name not in before
-            ]
-            log("[profile] settled %ss, %d new rank dirs, %.1f MB total" % (args.settle, len(fresh), dir_size_mb(prof_dir)))
-            expected = int(cfg.get("tp_size") or 1)
-            if len(fresh) < expected:
-                log("[profile] WARNING only %d of %d rank traces appeared; check the service log" % (len(fresh), expected))
+            total = len(snapshot(prof_dir))
+            log("[profile] trace dirs=%d, total %.1f MB" % (total, dir_size_mb(prof_dir)))
+            expected = int(cfg.get("tp_size") or 1) * max(len(entries), 1)
+            if total < expected:
+                log(
+                    "[profile] WARNING expected about %d rank dirs, saw %d; check the service log"
+                    % (expected, total)
+                )
         finally:
             stop_service(proc)
 
-    summary = {
+    windows = {
         "config": cfg["name"],
         "repo": cfg.get("repo"),
         "head": serve_config.git_head(cfg.get("repo")),
         "cp_balance": cfg.get("cp_balance"),
         "reduce_mode": cfg.get("reduce_mode"),
         "min_tokens": cfg.get("min_tokens"),
-        "profiler_dir": prof_dir,
-        "kind": args.kind,
-        "warmup": args.warmup,
-        "requests": args.requests,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "samples": samples,
-        "mean_elapsed_s": round(
-            sum(item["elapsed_s"] for item in samples) / max(len(samples), 1), 4
-        ),
+        "mode": "lengths" if lengths else "single",
+        "entries": entries,
     }
+    (Path(prof_dir) / "windows.json").write_text(
+        json.dumps(windows, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    summary = dict(windows)
+    summary["profiler_dir"] = prof_dir
+    summary["mean_elapsed_s"] = round(
+        sum(entry["wall_s"] for entry in entries) / max(len(entries), 1), 4
+    )
     out = HERE / ("prof_%s.json" % cfg["name"])
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    log("[profile] mean request time %ss -> %s" % (summary["mean_elapsed_s"], out))
+    log("[profile] %d windows -> %s" % (len(entries), out))
     return summary
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("configs", nargs="+", help="config name under configs/ (profiler enabled)")
-    parser.add_argument("--kind", default="long", help="questions.json kind (default: long, >MIN_TOKENS)")
-    parser.add_argument("--warmup", type=int, default=2, help="unprofiled requests before start_profile")
-    parser.add_argument("--requests", type=int, default=4, help="profiled requests")
+    parser.add_argument("--kind", default="long", help="questions.json kind used to build prompts")
+    parser.add_argument("--warmup", type=int, default=2, help="unprofiled requests (single-window mode only)")
+    parser.add_argument("--requests", type=int, default=4, help="profiled requests (single-window mode only)")
     parser.add_argument("--max-completion-tokens", type=int, default=1)
     parser.add_argument("--endpoint", default="/v1/completions")
     parser.add_argument("--model", default="", help="served model name (default: questions.json hint)")
     parser.add_argument("--timeout", type=float, default=3600.0)
     parser.add_argument("--ready-timeout", type=int, default=1800)
     parser.add_argument("--settle", type=int, default=45, help="seconds to let the trace flush after /stop_profile")
+    parser.add_argument("--no-clean-pass", dest="clean_pass", action="store_false", help="skip the unprofiled second pass")
     args = parser.parse_args()
 
     results = []
@@ -279,18 +385,17 @@ def main() -> int:
     for name in args.configs:
         try:
             results.append(run_config(name, args))
-        except (SystemExit, Exception) as exc:  # noqa: BLE001 - keep the other configs running
+        except Exception as exc:  # noqa: BLE001 - keep the other configs running
             log("[profile] FAILED %s: %s" % (name, exc))
             failed.append(str(name))
     log("[profile] ---- summary ----")
     for item in results:
         log(
-            "[profile] %-24s cp_balance=%s mean_request=%ss dir=%s"
-            % (item["config"], item["cp_balance"], item["mean_elapsed_s"], item["profiler_dir"])
+            "[profile] %-24s windows=%s cp_balance=%s dir=%s"
+            % (item["config"], len(item["entries"]), item["cp_balance"], item["profiler_dir"])
         )
     if failed:
         log("[profile] FAILED configs: %s" % ", ".join(failed))
-    log("[profile] next: python3 profile_analyse.py " + " ".join(item["profiler_dir"] for item in results))
     return 0
 
 

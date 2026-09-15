@@ -4,10 +4,20 @@
   "profiler": {
     "enabled": true,
     "with_stack": false,
-    "ignore_frontend": true
+    "ignore_frontend": true,
+    "delay_iterations": 0,
+    "max_iterations": 1
   },
   "debug": 0,
   "env": {
     "VLLM_CUSTOM_SCOPES_FOR_PROFILING": "1"
-  }
+  },
+  "lengths": [
+    1024,
+    2048,
+    4096,
+    6144,
+    8192,
+    12288
+  ]
 }

@@ -164,12 +164,20 @@ def profiler_dir(cfg: dict) -> str:
 def profiler_payload(cfg: dict) -> dict:
     """`--profiler-config` value; only the worker-side torch_npu fields."""
     profiler = cfg.get("profiler") or {}
-    return {
+    payload = {
         "profiler": "torch",
         "torch_profiler_dir": profiler_dir(cfg),
         "torch_profiler_with_stack": bool(profiler.get("with_stack", False)),
         "ignore_frontend": bool(profiler.get("ignore_frontend", True)),
     }
+    # delay_iterations / max_iterations bound the capture window on the worker
+    # side.  max_iterations=1 keeps one request's window to its prefill step
+    # plus at most one decode, instead of everything that happens before
+    # /stop_profile arrives.
+    for key in ("delay_iterations", "max_iterations"):
+        if profiler.get(key) is not None:
+            payload[key] = int(profiler[key])
+    return payload
 
 
 def git_head(repo) -> str:
