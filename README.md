@@ -253,7 +253,12 @@ python compare_first_token.py compare cp_on.json cur_off.json
 
 ## profiling：对比 cp_balance 开关下的 forward
 
-四个配置串行跑，每个配置一次服务起停：
+四个配置串行跑，每个配置一次服务起停。每个配置按 config 里的 lengths
+（1024/2048/4096/6144/8192/12288 token）各采一个窗口，每个窗口只含一个 prefill 步：
+热身一条（不采）→ /start_profile → 一条 max_completion_tokens=1 的请求 → /stop_profile，
+profiler 侧带 delay_iterations=0 / max_iterations=1。采完再按同一串长度跑一遍不采样的对照，
+拿到真实端到端耗时。prompt 由 questions.json 的文章按 /tokenize 二分切成指定 token 数，
+四个配置用同一段文本、同一组长度，所以可比。
 
 ```bash
 cd /opt/its/z30055003/cp_balance
@@ -285,8 +290,14 @@ python3 profile_compare.py prof_cur_cp0 prof_cur_cp1
 python3 profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 ```
 
-要回传的只有每个目录下的 `summary.json`（几 KB）、`prof_*.json`、`profile_*.log`
-和各次服务的指纹行；`*_ascend_pt` 原始 trace 不用拷。
+要回传的：每个 profiler 目录下的 `summary.json`、windows.json（窗口与长度的对应关系）、
+`export/`（每 rank 的小 CSV），仓库根目录的 `prof_*.json` 与 `profile_*.log` 的指纹行；
+`*_ascend_pt` 原始 trace 不用拷。
+
+判读先看 `profile_compare.py` 的第一张表：每个长度一行，`steps` 必须是 1（不是 1 会打
+WARNING），`attn/ref` 是 attention 时间除以 MoE dispatch 时间——后者在四个配置里做完全相同的
+活、cp_balance 也从不碰它，用它当内参可以消掉机器漂移。上一轮同样代码路径的两个配置整体差 12%，
+比要测的效应还大，所以不看比值看不出来。
 
 判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
 
