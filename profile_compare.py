@@ -46,22 +46,24 @@ def rank_union_count(summary: dict, field: str) -> dict:
 
 
 def print_spread(labels: list[str], summaries: list[dict]) -> None:
-    print("[compare] per-rank operator time (sum over the profiling window)")
-    print("  %-18s %10s %10s %10s %10s" % ("dir", "max", "mean", "min", "max/mean"))
-    for label, summary in zip(labels, summaries):
-        values = summary["digest"]["op_total_us"]
-        print(
-            "  %-18s %10.1f %10.1f %10.1f %10.3f"
-            % (label, values["max"], values["mean"], values["min"], values["max"] / max(values["mean"], 1e-9))
-        )
-    print("[compare] per-rank collective (HCCL) time")
-    print("  %-18s %10s %10s %10s" % ("dir", "max", "mean", "min"))
-    for label, summary in zip(labels, summaries):
-        values = summary["digest"]["comm_total_us"]
-        print(
-            "  %-18s %10.1f %10.1f %10.1f"
-            % (label, values["max"], values["mean"], values["min"])
-        )
+    metrics = (
+        ("step_computing_us", "per-rank step Computing (max over steps)"),
+        ("step_comm_us", "per-rank step Communication (max over steps)"),
+        ("op_total_us", "per-rank operator time over the whole window"),
+        ("comm_total_us", "per-rank collective time"),
+        ("comm_calls", "per-rank collective call count"),
+    )
+    for key, title in metrics:
+        if not all(summary["digest"].get(key) for summary in summaries):
+            continue
+        print("[compare] %s" % title)
+        print("  %-18s %12s %12s %12s %10s" % ("dir", "max", "mean", "min", "max/mean"))
+        for label, summary in zip(labels, summaries):
+            values = summary["digest"][key]
+            print(
+                "  %-18s %12.1f %12.1f %12.1f %10.3f"
+                % (label, values["max"], values["mean"], values["min"], values["max"] / max(values["mean"], 1e-9))
+            )
 
 
 def print_ops(labels: list[str], summaries: list[dict]) -> None:
