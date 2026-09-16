@@ -166,7 +166,19 @@ daemon，torch_npu 解析器拒绝在 daemon 里跑），脚本已经这么做�
 | 每个 `prof_a5_*/` 的 `summary.json`、`windows.json`、`export/`、`order_rank0.json` | 性能对比与算子归因 |
 | `check_cp_balance_fields.py` / `check_b_path.py` 的完整输出 | 静态门控 |
 
-打包示例（只回传必要文件，不要拉原始 trace）：
+打包：一条命令收齐（自动清点 + 生成文本结论 + 打指纹 + 只装小文件，永不包含原始 trace）：
+
+```bash
+bash perf/collect.sh                      # 自动收集所有已有 summary.json 的配置
+bash perf/collect.sh prof_a5_cur_cp0 prof_a5_cur_cp1 prof_a5_cur_cp0_repeat prof_a5_base_cp0
+bash perf/collect.sh --prune-traces       # 打包完顺手删掉原始 trace（腾空间）
+```
+
+产物在 `collect_<时间戳>/`：`inventory.txt`（每个配置哪些文件齐、原始 trace 占多大）、`clean_s.txt`（逐长度的采样/不采样耗时）、`cmp_*.txt`、`order_*.txt`、`fingerprints.txt`（每个配置的 `[cp_balance] CONFIG=` 行 + 代码树 HEAD），以及打包好的 `<目录名>.tgz`（含 md5）。
+
+精度验收（§3）的产物仍按下表手动打包。
+
+手动 tar 示例（旧写法，保留备用）：
 
 ```bash
 tar czf a5_round2_$(date +%m%d_%H%M).tgz \

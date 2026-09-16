@@ -203,6 +203,8 @@ indexer 那处同理（`idx_slots` / `k_li` / `k_li_scale` 用同一个 `keep` �
 
 ---
 
+> A3 的 profiling 收集用 `bash perf/collect.sh` 一条命令：清点 → 逐长度 clean_s → compare/order 文本 → 指纹 → 打包（不含原始 trace）。
+
 ## 7. 若要继续 profiling：先把可判定性补上
 
 上一轮四轮 profiling 的证据（`data/send/export/*op_statistic.csv`，rank0）：

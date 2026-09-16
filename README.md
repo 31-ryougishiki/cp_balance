@@ -440,6 +440,7 @@ A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.13
 | `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
 | `perf/profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
 | `perf/profile.sh` | 78 层全量一轮：自检 + 采集 + 解析 + 对比 + 顺序归因，结论来源 |
+| `perf/collect.py` / `.sh` | 收集一轮 profiling 的结果：清点产物 → 逐长度 clean_s 表 → compare/order 文本 → 指纹 → 打包（不含原始 trace） |
 | `perf/check_cp_balance_fields.py` | 静态自检 ZigzagPlan / meta dict / DSACPContext 三方字段是否对得上 |
 | `perf/profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |
 | `perf/profile_l6.sh` | 6 层快跑：只用于快速复看顺序与归因，不用于结论 |
