@@ -134,7 +134,7 @@ bash perf/profile_a5.sh prof_a5_cur_cp0 prof_a5_cur_cp1 prof_a5_cur_cp1_a2a prof
 3. 每个长度的窗口 `steps` 必须是 1（脚本会打 WARNING），不是 1 的话这一档作废。
 4. `trace_view.json` 很大时用 `--trim`（只回传 `order_rank0.json`）。
 
-采集 + 解析 + 对比一条龙在 `perf/profile_a5.sh` 里；解析必须在远端单独起进程（mp 后端 worker 是
+采集 + 解析 + **收集打包**一条龙在 `perf/profile_a5.sh` 里（结束时自动调用 `perf/collect.py`，产物见 §7）；解析必须在远端单独起进程（mp 后端 worker 是
 daemon，torch_npu 解析器拒绝在 daemon 里跑），脚本已经这么做。
 
 ## 5. A5 上要先确认的三件事

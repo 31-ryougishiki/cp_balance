@@ -326,6 +326,8 @@ WARNING），然后只看绝对量——attention 时间、集合通信时间、
 
 判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
 
+采集、解析、收集三段现在由 `bash perf/profile.sh` 串起来，结束时自动调用 `perf/collect.py` 把清点/clean_s/compare/order/指纹打成一个 `collect_<时间戳>/*.tgz`（不含原始 trace），不用再手工 tar。
+
 ### 6 层快跑（只用于快速复看，不用于结论）
 
 结论一律来自 `profile.sh` 的 78 层四组。6 层是给“改完一处后想快速再看一眼顺序和
@@ -437,9 +439,9 @@ A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.13
 | `configs/matrix_a5_*.json` | A5 的两套矩阵（C 验收、B 等价性） |
 | `accuracy/round2_verify.py` / `.sh` | 本轮验收一键跑：静态门控 + C 验收 + B 等价性 + 可选 A/B（临时补丁自动还原，产物在 `round2_<时间戳>/`） |
 | `perf/profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
-| `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json` |
+| `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json`（`export/` 只留三个小 CSV，`communication*.json` 不回传） |
 | `perf/profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
-| `perf/profile.sh` | 78 层全量一轮：自检 + 采集 + 解析 + 对比 + 顺序归因，结论来源 |
+| `perf/profile.sh` | 78 层全量一轮：自检 + 采集 + 解析 + **自动收集打包**（对比/顺序文本进包），结论来源 |
 | `perf/collect.py` / `.sh` | 收集一轮 profiling 的结果：清点产物 → 逐长度 clean_s 表 → compare/order 文本 → 指纹 → 打包（不含原始 trace） |
 | `perf/check_cp_balance_fields.py` | 静态自检 ZigzagPlan / meta dict / DSACPContext 三方字段是否对得上 |
 | `perf/profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |

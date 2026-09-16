@@ -35,7 +35,12 @@ from pathlib import Path
 OUTPUT_DIR = "ASCEND_PROFILER_OUTPUT"
 DONE_MARK = "analyse.done"
 EXPORT_DIR = "export"
-EXPORT_FILES = ("op_statistic.csv", "step_trace_time.csv", "api_statistic.csv", "communication.json")
+# Only the small per-rank CSVs are copied out.  communication.json /
+# communication_matrix.json stay in the raw trace directory: they are orders of
+# magnitude bigger, nothing in this repo parses them (HCCL time and counts come
+# from the hcom_* rows of op_statistic.csv, the per-step comm/compute split from
+# step_trace_time.csv), and they are never bundled.
+EXPORT_FILES = ("op_statistic.csv", "step_trace_time.csv", "api_statistic.csv")
 COMM_HINTS = ("hccl", "hcom", "allgather", "allreduce", "reducescatter", "alltoall", "barrier", "aicpukernel")
 ATTENTION_HINTS = ("FlashAttention", "LightningIndexer")
 TIME_COLUMNS = ("total time(us)", "total time", "duration(us)", "duration", "total_time")
