@@ -12,14 +12,14 @@ cp_balance/
     compare_first_token.py    collect / compare 首词元
     check_branch.py           证明请求走 ZIGZAG 还是 CONTINUOUS
     check_b_path.py           静态证明 cp_balance 只作用于 zigzag 路径
-    run_matrix.py / .sh       矩阵：串行起停服务、采集、对比、给裁定
+    run_matrix.py            矩阵：串行起停服务、采集、对比、给裁定
   perf/               性能采集：profiling 采集、解析、对比、算子归因
     profile_forward.py        按长度逐档采集（只含 prefill 步的窗口）
     profile_analyse.py        解析 + 按窗口分组 + 审计每个窗口几步
     profile_compare.py        逐长度对比
     profile_order.py          算子调用顺序 + device kernel 归因到 host scope
     check_cp_balance_fields.py  静态自检三个容器的字段是否对得上
-    profile.sh / profile_l6.sh  全量 / 6 层的一键入口
+    profile_l6.sh             6 层快跑（78 层一轮走 tests/perf）
 ```
 
 产物（`matrix_*/`、`prof_*/`、`prof_*.json`、`profile_*.log`）都写在仓库根目录。
@@ -56,8 +56,8 @@ bash run.sh glm52_cur_cp0 --dry-run --print-env   # 只打印命令与环境
 矩阵（一次跑多组并给裁定）同样是 JSON：
 
 ```bash
-bash accuracy/run_matrix.sh configs/matrix_b_vs_base.json      # B==base + 噪声地板
-bash accuracy/run_matrix.sh configs/matrix_c_accept.json       # C 验收（首 token）
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate        # B==base + 噪声地板 + C 验收（首 token）
+python3 accuracy/run_matrix.py configs/matrix_b_vs_base.json   # 只想跑一个矩阵（不给裁定）
 ```
 
 `configs` 字段列出要跑的配置，`compare` 列出对比项：`left`/`right` 用配置的 `name`，
@@ -200,7 +200,7 @@ python accuracy/check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
 ### 步骤 1：一条命令跑完四组实验（推荐）
 
 ```bash
-bash accuracy/run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）会开确定性变量
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate --keep-going
 ```
 
 串行跑四组，每组服务起停一次、采 40 条 prompt：
@@ -212,12 +212,11 @@ bash accuracy/run_matrix.sh eth2 8034        # 第 3 个参数 det=1（默认）
 | `base_off` | base 分支 | — | 原版 DSA-CP |
 | `base_off2` | base 分支 | — | **噪声地板**（同代码树重复一次） |
 
-输出目录 `matrix_<时间戳>/`：`summary.txt`（每组指纹 + 归约计数 + 对比结论）、
-`*.log`、`*.json`、`cmp_*.txt`。裁定：`R1` 与 `R3` 同时 PASS 才打印 `RESULT: PASS`；
-`R3` FAIL 说明测量本身不可复现，先别谈代码差异。
-
-可选环境变量：`VLLM_ASCEND_REPO_CUR` / `VLLM_ASCEND_REPO_BASE` / `RUNS`
-（如 `RUNS=cur_off,base_off`）/ `OUT_DIR` / `READY_TIMEOUT`。
+矩阵内容写在 `configs/matrix_*.json`：`configs` 列出要跑的配置，`compare` 列出对比项
+（`gate=true` 的项失败则整体 FAIL）。每个变体的产物在
+`tests/_out/<时间戳>/accuracy/a10_matrix_gate.<变体>/matrix/`：`summary.txt`（每组指纹 +
+归约计数 + 对比结论）、`*.log`、`*.json`、`cmp_*.txt`；噪声地板那一项 FAIL 说明测量本身
+不可复现，先别谈代码差异。
 
 ### 步骤 1-手动：分步等价命令
 
@@ -324,13 +323,13 @@ WARNING），然后只看绝对量——attention 时间、集合通信时间、
 重复一轮来量，不能靠除掉一个所谓不受影响的算子——zigzag 会改变各 rank 持有的 token 集合，MoE 的
 路由分布跟着变，dispatch 时间本来就可能变。
 
-判读顺序与性能假设见仓库根目录 `docs/perf_plan.md`。
+判读顺序与性能假设见工程机文档目录的 `docs/perf_plan.md`（未随本仓库提交）。
 
-采集、解析、收集三段现在由 `bash perf/profile.sh` 串起来，结束时自动调用 `perf/collect.py` 把清点/clean_s/compare/order/指纹打成一个 `collect_<时间戳>/*.tgz`（不含原始 trace），不用再手工 tar。
+采集、解析、对比、归因、打包由 `bash tests/run_tests.sh --only perf` 串起来，最后一步自动调用 `perf/collect.py` 把清点/clean_s/compare/order/指纹打成一个 `collect_<时间戳>/*.tgz`（不含原始 trace），不用再手工 tar。
 
 ### 6 层快跑（只用于快速复看，不用于结论）
 
-结论一律来自 `profile.sh` 的 78 层四组。6 层是给“改完一处后想快速再看一眼顺序和
+结论一律来自 `tests/perf` 的 78 层四组。6 层是给“改完一处后想快速再看一眼顺序和
 归因”用的，由启动参数覆盖，不改模型目录：
 
     bash perf/profile_l6.sh
@@ -343,7 +342,7 @@ WARNING），然后只看绝对量——attention 时间、集合通信时间、
 
 注意：6 层只能用来比“一层里各算子占多少”和“顺序”，不能拿来报绝对值——
 每步固定开销（metadata、embedding、出口 gather、logits）的占比会被放大。
-报绝对耗时仍用 `profile.sh` 的 78 层四组。
+报绝对耗时仍用 `tests/perf` 的 78 层四组。
 
 ### 算子调用顺序 + 对应代码
 
@@ -382,10 +381,10 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里就没有任何命名区间�
 bash run.sh glm52_cur_cp0 --dry-run --print-env      # 期望 TP=16 NIC=eth2 IP=7.246.78.75
 
 # 1. 精度：静态门控 + C 验收 + B 等价性 + 可选 A/B（约 1 小时）
-bash accuracy/round2_verify_a3.sh
+bash tests/run_tests.sh --from accuracy
 
-# 2. 性能：78 层四组（cp0 / cp1 / cp0_repeat / base_cp0）+ 解析 + 归因
-bash perf/profile.sh
+# 2. 性能：78 层四组（cp0 / cp1 / cp0_repeat / base_cp0）+ 解析 + 归因 + 打包
+bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a
 ```
 
 前置（两棵代码树都在同一台机器上）：
@@ -399,16 +398,16 @@ cd /opt/its/z30055003/cp_balance && git pull         # harness（本轮 driver +
 与 A5 的差别：TP=16（cp_size=16，zigzag 每序列切 32 块）、模型是 W4A8C8（不是 mxfp4）、
 **没有 MTP**、profiling 沿用确定性环境变量；配置是 `configs/_common.json` +
 `configs/prof_*.json`，端口 8034~8037（prof_cur_cp0 与 repeat 同为 8034，串行不冲突）。
-判据、失败排查与回传清单见 `docs/cp_balance_remote_checklist.md`。
+判据、失败排查与回传清单见工程机文档目录的 `docs/cp_balance_remote_checklist.md`（未随本仓库提交）。
 
 ## A5 环境（8 卡，GLM-5.2-w4a4c8-mxfp4）
 
-A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传清单见 `docs/a5_test_plan.md`。
+A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传清单见工程机文档目录的 `docs/a5_test_plan.md`（未随本仓库提交）。
 一条命令：
 
 ```bash
-bash accuracy/round2_verify_a5.sh     # 精度：静态门控 + C 验收 + B 等价性 + 可选 A/B
-bash perf/profile_a5.sh               # 性能：cp0 / cp1 / cp0_repeat / base_cp0 四组
+bash tests/run_tests.sh --from accuracy                     # 精度：静态门控 + C 验收 + B 等价性 + 可选 A/B
+bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a   # 性能：cp0 / cp1 / cp0_repeat / base_cp0
 ```
 
 A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.133.112、
@@ -417,8 +416,33 @@ A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.13
 换机器（IP / 网卡不同）不用改配置：在那台机器的 shell 里导出 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME`（需要时还有 `CP_BALANCE_DEVICES`）即可，例如
 `export CP_BALANCE_LOCAL_IP=141.61.133.104 CP_BALANCE_NIC_NAME=eth2`；命令行 `--set` 优先于环境变量。
 
+目标机 `.104` 的完整命令清单（机器族判定、冒烟、精度/性能入口、打包回传）见工程机文档目录的
+`docs/a5_104_runbook.md`（未随本仓库提交）；`reduce_mode=allreduce` / `alltoall` 的对照是可选
+A/B（`prof_a5_cur_cp1_a2a`，端口 8086），默认流程不跑，说明见该文档 §4。
+
 两处需要按现场确认：base 代码树路径（默认 `/home/z30055003/vllm-ascend-base`）与
 `cp_balance` 仓库位置（脚本假定在当前目录运行）。
+
+## 测试入口（tests/）
+
+所有测试按"依赖与成本"分三层放在 `tests/` 下，由 `tests/run_tests.sh` 统一调用；每个测试也能单独跑。
+
+```bash
+bash tests/run_tests.sh --list          # 全部测试（id/needs/tags/est/desc）
+bash tests/run_tests.sh --tag fast      # 秒级~分钟级前置检查（不起服务）
+bash tests/run_tests.sh --only smoke/s10_service_ready
+bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
+```
+
+| 层 | 内容 | 成本 |
+| --- | --- | --- |
+| `tests/smoke/` | 环境/配置解析/路径/端口/磁盘 + 两个静态门控 + 服务能否起来 + 请求是否 ZIGZAG | 秒级；两个服务级各 ~12min |
+| `tests/accuracy/` | 矩阵首 token 验收（C/B/nomtp）+ 复用已采 json 的对比 + slot<0 补丁 A/B | 每个矩阵 1 次服务起停 |
+| `tests/perf/` | 逐配置 profiling 采集 → 解析 → 单步窗口审计 → 对比/顺序报告 → 打包 | 每组一次服务起停 |
+
+约定（元数据、`--from` 续跑、`CP_BALANCE_FAMILY` 切机器族、`roles.tsv` 角色表）见 `tests/README.md`；
+老的聚合入口（`round2_verify*.sh`、`perf/profile*.sh`、`run_matrix.sh`、`collect.sh`、`run_a5.sh`）已删除，统一从 tests/ 进。
+远端的完整跑法与回传清单见工程机文档目录的 `docs/remote_run.md`（未随本仓库提交）。
 
 ## 文件
 
@@ -432,18 +456,21 @@ A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.13
 | `accuracy/compare_first_token.py` | collect / compare 首词元 |
 | `accuracy/check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
 | `accuracy/check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
-| `accuracy/run_matrix.sh` | `run_matrix.py` 的入口包装 |
-| `accuracy/round2_verify_a5.sh` | 本轮验收，换 A5 的矩阵/端口/代码树 |
-| `perf/profile_a5.sh` | A5 全量性能采集（78 层四组 + 噪声地板 + 解析 + 算子归因） |
 | `configs/_common_a5.json` / `_common_a5_mtp.json` | A5 公共参数（后者额外打开 MTP） |
 | `configs/matrix_a5_*.json` | A5 的两套矩阵（C 验收、B 等价性） |
-| `accuracy/round2_verify.py` / `.sh` | 本轮验收一键跑：静态门控 + C 验收 + B 等价性 + 可选 A/B（临时补丁自动还原，产物在 `round2_<时间戳>/`） |
+| `accuracy/round2_verify.py` | 本轮验收 driver（步骤 0~3）：现在只由 `tests/accuracy/a30_slot_filter_ab` 驱动（step 3 的 slot<0 补丁 A/B，补丁自动还原） |
 | `perf/profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
 | `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json`（`export/` 只留三个小 CSV，`communication*.json` 不回传） |
 | `perf/profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
-| `perf/profile.sh` | 78 层全量一轮：自检 + 采集 + 解析 + **自动收集打包**（对比/顺序文本进包），结论来源 |
-| `perf/collect.py` / `.sh` | 收集一轮 profiling 的结果：清点产物 → 逐长度 clean_s 表 → compare/order 文本 → 指纹 → 打包（不含原始 trace） |
+| `perf/collect.py` | 收集一轮 profiling 的结果：清点产物 → 逐长度 clean_s 表 → compare/order 文本 → 指纹 → 打包（不含原始 trace） |
 | `perf/check_cp_balance_fields.py` | 静态自检 ZigzagPlan / meta dict / DSACPContext 三方字段是否对得上 |
 | `perf/profile_order.py` | 算子调用顺序 + device kernel 归因到 host scope + 映射回 文件:行号 |
 | `perf/profile_l6.sh` | 6 层快跑：只用于快速复看顺序与归因，不用于结论 |
 | `_profile_l6_common.json` | 6 层覆盖（`--hf-overrides`），其余继承 `_profile_common.json` |
+| `tests/run_tests.sh` | 统一测试入口：发现/筛选/执行/汇总（`--list / --only / --tag / --from / --keep-going / --strict`） |
+| `tests/lib/common.sh` | 测试共用：断言、角色表查询、服务起停（端口登记 + EXIT 收尾） |
+| `tests/lib/roles.tsv` | 角色表：family / group / role / config |
+| `tests/lib/hx.py` | 测试共用：配置/指纹/路径/端口/窗口读取 |
+| `tests/smoke/*.sh` | 冒烟：环境、配置解析、路径、端口、磁盘、静态门控、服务就绪、ZIGZAG 请求 |
+| `tests/accuracy/*.sh` | 精度：矩阵门禁（C/B/nomtp）、对比复跑、slot<0 补丁 A/B |
+| `tests/perf/*.sh` | 性能：采集、解析、窗口单步审计、对比报告、顺序归因、打包 |

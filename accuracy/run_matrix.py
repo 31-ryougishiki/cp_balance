@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run a matrix config: launch each referenced config, collect 40 prompts, compare.
 
-    python run_matrix.py configs/matrix_b_vs_base.json
-    bash run_matrix.sh configs/matrix_b_vs_base.json
+    python3 accuracy/run_matrix.py configs/matrix_b_vs_base.json
+    bash tests/run_tests.sh --only accuracy/a10_matrix_gate     # 走测试入口（推荐）
 
 Each entry of "configs" is one test config under configs/; the ports come from
 those configs, so runs are fully described by JSON.

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Round-2 verification driver: one command, one verdict per item.
 
-    bash accuracy/round2_verify.sh                  # run every step
-    bash accuracy/round2_verify.sh --steps 0,1,2    # skip the optional A/B
-    bash accuracy/round2_verify.sh --dry-run        # show the resolved plan only
+Driven by tests/accuracy/a30_slot_filter_ab.sh (step 3 only). Steps 0-2 are kept
+as a fallback; the standard entries are tests/smoke/s06,s07 and
+tests/accuracy/a10_matrix_gate.
+
+    python3 accuracy/round2_verify.py --steps 3 --optional-config glm52_cur_cp1
+    python3 accuracy/round2_verify.py --dry-run       # show the resolved plan only
 
 Steps
   0  static gates (no service): check_cp_balance_fields + check_b_path
@@ -129,7 +132,7 @@ def step_matrix(rep: Report, step: str, matrix: str, tag: str) -> tuple:
     out.mkdir(parents=True, exist_ok=True)
     rep.log("step %s: %s  (out=%s)" % (step, matrix, out))
     proc = subprocess.run(
-        ["bash", str(HERE / "run_matrix.sh"), matrix, "--out", str(out)],
+        [sys.executable, str(HERE / "run_matrix.py"), matrix, "--out", str(out)],
         capture_output=True,
         text=True,
     )
@@ -353,7 +356,7 @@ def main() -> int:
     parser.add_argument("--ready-timeout", type=int, default=1800, help="service ready timeout in seconds")
     parser.add_argument("--dry-run", action="store_true", help="print the resolved plan and exit")
     args = parser.parse_args()
-    os.chdir(ROOT)  # products and relative config paths follow the repo root, like run_matrix.sh
+    os.chdir(ROOT)  # products and relative config paths follow the repo root, like run_matrix.py
 
     C_MATRIX = args.c_matrix
     B_MATRIX = args.b_matrix

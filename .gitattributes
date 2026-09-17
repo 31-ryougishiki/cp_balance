@@ -1,0 +1,9 @@
+# 执行用文件必须 LF：CRLF 会让 Linux 上的 bash 在 set/source 那几行直接失败，
+# 也会让 awk 读出的最后一个字段带回 \r（Windows 的 core.autocrlf=true 会重新引入 CRLF）。
+*.sh  text eol=lf
+*.py  text eol=lf
+*.tsv text eol=lf
+# 文本文件同样按 LF 检出，免得同一个目录里 LF/CRLF 混着
+*.md           text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf

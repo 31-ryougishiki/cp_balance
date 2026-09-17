@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Collect one profiling round into a single tarball (never the raw traces).
 
-Ran automatically at the end of perf/profile.sh and perf/profile_a5.sh; can
-also be started by hand:
+Driven by tests/perf/p24_collect (the standard entry) or by hand:
 
-    bash perf/collect.sh                          # every config with a summary.json
-    bash perf/collect.sh prof_cur_cp0 prof_cur_cp1
-    bash perf/collect.sh --prune-traces           # delete *_ascend_pt after bundling
+    python3 perf/collect.py                          # every config with a summary.json
+    python3 perf/collect.py prof_cur_cp0 prof_cur_cp1
+    python3 perf/collect.py --prune-traces           # delete *_ascend_pt after bundling
 
 Output goes to collect_<timestamp>/: inventory.txt, clean_s.txt, cmp_*.txt,
 order_*.txt, fingerprints.txt and <dir>.tgz (with size and md5 printed).

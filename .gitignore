@@ -6,3 +6,4 @@ prof_*/
 *.log
 /*.json
 /*.txt
+tests/_out/

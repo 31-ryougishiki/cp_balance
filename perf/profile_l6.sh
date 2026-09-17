@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 6 层快跑：只用于快速复看算子顺序与归因，结论不取这一轮。
-# 结论（绝对耗时、rank 间失衡、净收益）一律来自 perf/profile.sh 的 78 层四组。
+# 结论（绝对耗时、rank 间失衡、净收益）一律来自 tests/perf 的 78 层四组（p10_capture -> p20..p24）。
 #
 #   bash perf/profile_l6.sh                              # 默认四组
 #   bash perf/profile_l6.sh prof_l6_cur_cp0 prof_l6_cur_cp1
