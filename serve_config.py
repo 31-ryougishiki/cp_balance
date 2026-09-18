@@ -19,6 +19,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -103,11 +104,40 @@ def apply_set(cfg: dict, expr: str) -> None:
     node[parts[-1]] = value
 
 
+def detect_netif() -> tuple[str | None, str | None]:
+    """(iface, ip) of the best local IPv4 link; (None, None) when unknown."""
+    sys.path.insert(0, str(HERE / "tests" / "lib"))
+    try:
+        import netif  # noqa: PLC0415 - harness helper next to this file
+    except Exception:
+        return None, None
+    item = netif.best()
+    if not item:
+        return None, None
+    return item["iface"], item["ip"]
+
+
+def _is_auto(value) -> bool:
+    return value is None or str(value).strip() in ("", "auto")
+
+
 def apply_env_overrides(cfg: dict) -> dict:
     for key, env_name in ENV_OVERRIDES:
         value = os.environ.get(env_name)
         if value:
             cfg[key] = value
+    # Machine fields may be left as "auto" (or unset) on hosts/containers where
+    # the IP and NIC cannot be written down in advance.
+    if _is_auto(cfg.get("local_ip")) or _is_auto(cfg.get("nic_name")):
+        iface, ip = detect_netif()
+        if _is_auto(cfg.get("local_ip")) and ip:
+            cfg["local_ip"] = ip
+        if _is_auto(cfg.get("nic_name")) and iface:
+            cfg["nic_name"] = iface
+    if _is_auto(cfg.get("devices")):
+        env_devices = os.environ.get("ASCEND_RT_VISIBLE_DEVICES")
+        if env_devices:
+            cfg["devices"] = env_devices
     return cfg
 
 
@@ -115,9 +145,9 @@ def build_env(cfg: dict) -> dict:
     env = dict(os.environ)
     for key, value in (cfg.get("env") or {}).items():
         env[str(key)] = str(value)
-    if cfg.get("local_ip"):
+    if cfg.get("local_ip") and not _is_auto(cfg.get("local_ip")):
         env["HCCL_IF_IP"] = str(cfg["local_ip"])
-    if cfg.get("nic_name"):
+    if cfg.get("nic_name") and not _is_auto(cfg.get("nic_name")):
         for key in ("GLOO_SOCKET_IFNAME", "TP_SOCKET_IFNAME", "HCCL_SOCKET_IFNAME"):
             env[key] = str(cfg["nic_name"])
     if cfg.get("devices"):

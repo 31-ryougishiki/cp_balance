@@ -6,7 +6,8 @@
 #   bash verify_a5.sh --skip-smoke    # 不起服务
 #   bash verify_a5.sh --diag-only     # 只从最近一次 tests/_out 抓分支日志
 #
-# 必需环境变量：CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME
+# 环境变量：CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME 未设置时自动识别
+#           （默认路由接口优先，容器内没有 ip/ifconfig 也能用；多网卡建议显式指定）
 # 可选：CP_BALANCE_DEVICES / CP_BALANCE_REPO / CP_BALANCE_BASE_REPO / HX_READY_TRIES
 set -o pipefail
 
@@ -40,17 +41,27 @@ missing=()
 [ -n "${CP_BALANCE_LOCAL_IP:-}" ] || missing+=(CP_BALANCE_LOCAL_IP)
 [ -n "${CP_BALANCE_NIC_NAME:-}" ] || missing+=(CP_BALANCE_NIC_NAME)
 if [ ${#missing[@]} -gt 0 ]; then
-  bad "缺少环境变量：${missing[*]}"
-  cat <<'EOF'
-  在 A5 节点上这样准备（IP/网卡取本机实际值）：
-    cd /home/z30055003/cp_balance
-    export CP_BALANCE_FAMILY=a5
-    export CP_BALANCE_LOCAL_IP=$(ip -o -4 addr show | awk '$2!="lo"{print $4}' | cut -d/ -f1 | head -1)
-    export CP_BALANCE_NIC_NAME=$(ip -o -4 addr show | awk '$2!="lo"{print $2}' | head -1)
-    bash verify_a5.sh
-  可选：CP_BALANCE_DEVICES / CP_BALANCE_REPO / CP_BALANCE_BASE_REPO / HX_READY_TRIES
+  note "未设置 ${missing[*]}：尝试自动识别（容器内没有 ip/ifconfig 也可用）"
+  BEST=$(python3 tests/lib/netif.py --best 2>/dev/null || true)
+  if [ -n "$BEST" ]; then
+    DET_NIC=$(printf '%s' "$BEST" | cut -f1)
+    DET_IP=$(printf '%s' "$BEST" | cut -f2)
+    [ -n "${CP_BALANCE_NIC_NAME:-}" ] || export CP_BALANCE_NIC_NAME="$DET_NIC"
+    [ -n "${CP_BALANCE_LOCAL_IP:-}" ] || export CP_BALANCE_LOCAL_IP="$DET_IP"
+    note "识别到 NIC=$CP_BALANCE_NIC_NAME IP=$CP_BALANCE_LOCAL_IP"
+    note "全部候选（网卡 / IP / default=默认路由接口）："
+    python3 tests/lib/netif.py | sed 's/^/       /'
+    note "多网卡/多网段（RoCE 与业务网分开）时请显式 export CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME"
+  else
+    bad "没有识别到可用 IPv4 网卡"
+    cat <<'EOF'
+  容器里请显式指定（候选可用 python3 tests/lib/netif.py 查看）：
+    export CP_BALANCE_LOCAL_IP=<本机 IP>
+    export CP_BALANCE_NIC_NAME=<网卡名>
+  或把 configs/_common_a5.json 的 local_ip / nic_name 改成具体值（就不再走 auto）。
 EOF
-  exit 2
+    exit 2
+  fi
 fi
 [ -f tests/run_tests.sh ] || { bad "tests/run_tests.sh 不存在"; exit 2; }
 [ -f tests/lib/roles.tsv ] || { bad "tests/lib/roles.tsv 不存在"; exit 2; }

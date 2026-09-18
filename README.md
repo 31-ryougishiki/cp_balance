@@ -489,3 +489,10 @@ bash verify_a5.sh --skip-smoke    # 不起服务；--diag-only 只抓最近一�
 `CP_BALANCE_BASE_REPO` / `HX_READY_TRIES`）；family 脚本自己设成 a5，`VLLM_USE_V2_MODEL_RUNNER=0` 在
 `configs/_common_a5.json` 里，`VLLM_ASCEND_CP_BALANCE*` 由配置的 cp_balance/min_tokens/reduce_mode/debug 字段导出。
 判据：静态/冒烟 FAIL，或诊断里没有 `branch=ZIGZAG`（尤其 `reason=dp>1`）都算不通过，证据包 `verify_a5_*.tgz`。
+
+容器里 `local_ip` / `nic_name` 可以写成 `auto`（A5 公共配置已默认如此），解析顺序：环境变量
+`CP_BALANCE_LOCAL_IP`/`CP_BALANCE_NIC_NAME` > `configs/*.json` 里的具体值 > 自动识别。
+自动识别见 `tests/lib/netif.py`：优先默认路由接口（`/proc/net/route`），候选来自
+`SIOCGIFADDR`（纯 Python，无需 ip/ifconfig）→ `psutil` → `ip -o -4 addr` → `ifconfig -a` → `hostname -I`，
+过滤 lo/docker*/veth*/br-*/169.254.*；`python3 tests/lib/netif.py` 可列出全部候选。
+设备同理：`devices` 留空或写 `auto` 时取容器里的 `ASCEND_RT_VISIBLE_DEVICES`。
