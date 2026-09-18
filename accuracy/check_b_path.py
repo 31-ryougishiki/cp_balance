@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""Static proof that cp_balance is confined to the zigzag path.
+"""[新 main 线] 静态证明 cp_balance 只作用在 zigzag 路径上。
 
-Checks, without NPU and without importing the runtime:
+    python3 check_b_path.py --repo /home/z30055003/vllm-ascend \
+        --base-repo /home/z30055003/vllm-ascend-base
 
-1. every cp_balance-specific collective is gated on the per-forward zigzag flag;
-2. the bare VLLM_ASCEND_CP_BALANCE switch is only read by the eligibility
-   predicate inside layers/cp_zigzag.py, never by a collective;
-3. the fused q_up projection of the base branch is present with the same
-   permutations.
-
-    python check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
-        --base-repo /opt/its/z30055003/vllm-ascend-base
-
-PASS means the non-cp_balance path cannot statically reach any cp_balance-only
-code; the numeric part is verified by compare_first_token.py on the remote node.
+只读源码，不需要 NPU、不 import 运行时。PASS 表示：非 zigzag 的 forward 静态上碰不到
+cp_balance 专有代码（逐位等价仍由远端 compare_first_token.py 验证）。
 """
 
 from __future__ import annotations
@@ -23,10 +15,35 @@ from pathlib import Path
 
 SWITCH = "VLLM_ASCEND_CP_BALANCE"
 SWITCH_ALLOWED = {"envs.py", "layers/cp_zigzag.py"}
-FUSED = 'if hasattr(torch_npu, "npu_transpose_batchmatmul"):'
+ZIGZAG_FUNCTION = "def zigzag_active() -> bool:"
+FIXED_ORDER_CALL = "fixed_order_reduce_scatter("
+FIXED_ORDER_GATED_FILES = ("ops/linear_op.py", "ops/fused_moe/shared_experts.py")
+GUARD = "if zigzag_active():"
 
 
-def _function_body(text: str, marker: str) -> str:
+def gated_call_sites(text: str, call: str, guard: str) -> list:
+    """Call sites of the call that are not inside a block opened by the guard."""
+    lines = text.splitlines()
+    guard_lines = [i for i, line in enumerate(lines) if line.strip() == guard]
+    problems: list = []
+    for index, line in enumerate(lines):
+        if call not in line or line.lstrip().startswith("#"):
+            continue
+        ok = False
+        for guard_index in reversed(guard_lines):
+            if guard_index >= index:
+                continue
+            between = lines[guard_index + 1 : index]
+            if any(bl.startswith(("def ", "class ")) for bl in between):
+                break
+            ok = True
+            break
+        if not ok:
+            problems.append("%d: %s is not guarded by %s" % (index + 1, call, guard))
+    return problems
+
+
+def function_body(text: str, marker: str) -> str:
     start = text.index(marker) + len(marker)
     lines = text[start:].splitlines(keepends=True)
     for index, line in enumerate(lines):
@@ -35,36 +52,21 @@ def _function_body(text: str, marker: str) -> str:
     return "".join(lines)
 
 
-def _fused_block(text: str) -> str:
-    start = text.index(FUSED)
-    end = text.index("else:", start)
-    return " ".join(text[start:end].split())
-
-
-def _find_all(text: str, needle: str) -> list[int]:
-    hits: list[int] = []
-    start = text.find(needle)
-    while start != -1:
-        hits.append(start)
-        start = text.find(needle, start + 1)
-    return hits
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default="/opt/its/z30055003/vllm-ascend")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--repo", default="/home/z30055003/vllm-ascend")
     parser.add_argument("--base-repo", default="", help="optional vllm-ascend-base checkout")
     args = parser.parse_args()
 
     pkg = Path(args.repo) / "vllm_ascend"
     if not pkg.is_dir():
         raise SystemExit(f"vllm_ascend package not found under {args.repo}")
-    failures: list[str] = []
+    failures: list = []
 
     def src(rel: str) -> str:
         return (pkg / rel).read_text(encoding="utf-8")
 
-    def check(ok: bool, what: str, detail: list[str] | None = None) -> None:
+    def check(ok: bool, what: str, detail: list | None = None) -> None:
         print(f"[check] {'OK  ' if ok else 'FAIL'} {what}")
         if not ok:
             failures.append(what)
@@ -72,59 +74,74 @@ def main() -> int:
                 print(f"        {line}")
 
     ctx = src("ascend_forward_context.py")
-    linear = src("ops/linear_op.py")
-    custom = src("ops/register_custom_ops.py")
 
-    check(ctx.count("def zigzag_active() -> bool:") == 1, "per-forward zigzag_active() helper exists")
-    check(
-        linear.count("if zigzag_active():") == 2,
-        "both row-parallel reductions are gated on zigzag_active()",
+    # 1. 逐 forward 的门控开关只此一处
+    check(ctx.count(ZIGZAG_FUNCTION) == 1, "per-forward zigzag_active() helper exists exactly once")
+
+    # 2. 所有 owner 无关归约都在 zigzag 门控内（连续切片路径逐位走原集合通信）
+    for rel in FIXED_ORDER_GATED_FILES:
+        text = src(rel)
+        problems = gated_call_sites(text, FIXED_ORDER_CALL, GUARD)
+        check(not problems, f"{rel}: every fixed-order reduce site is gated on zigzag_active()", problems)
+
+    # 3. zigzag 只在 DSA-CP 元数据里落地：别处不得写 zigzag_index
+    writers: list = []
+    allowed_writers = (
+        "attention/context_parallel/sfa_cp.py",
+        "attention/context_parallel/zigzag_cp.py",
+        "layers/cp_zigzag.py",
+        "ascend_forward_context.py",
     )
-    check("dsa_cp_enabled" not in linear, "config-level DSA-CP gate removed from the MLP reduction")
+    for path in sorted(pkg.rglob("*.py")):
+        rel = path.relative_to(pkg).as_posix()
+        if rel in allowed_writers:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for index, line in enumerate(text.splitlines(), start=1):
+            if "zigzag_index =" in line and "None" not in line:
+                writers.append(f"{rel}:{index}")
+    check(not writers, "zigzag_index is only published by the DSA-CP metadata path", writers)
+
+    # 4. 出口 gather 只有一处（模型边界），runner 不再自己拼
+    runner = src("worker/model_runner_v1.py")
     check(
-        "def _fixed_order_zigzag_reduce_scatter" in custom and "if not zigzag_active():" in custom,
-        "pad_and_reduce (embedding + MoE finalize) is gated on zigzag_active()",
+        "zigzag_gather_hidden_states_and_aux" not in runner,
+        "model runner does not gather zigzag hidden states itself (model boundary owns it)",
     )
+    boundary = src("patch/worker/patch_deepseek_v2.py")
     check(
-        "_fixed_order_dsa_cp_reduce_scatter" not in custom,
-        "old config-level reduction helper is gone",
+        boundary.count("zigzag_gather_hidden_states_and_aux") >= 1 and "zigzag_active" in boundary,
+        "model boundary performs the zigzag exit gather behind the per-forward flag",
     )
 
-    offenders: list[str] = []
+    # 5. 裸开关只允许出现在 envs.py 与资格判定里
+    offenders: list = []
     for path in sorted(pkg.rglob("*.py")):
         text = path.read_text(encoding="utf-8", errors="replace")
         rel = path.relative_to(pkg).as_posix()
-        for hit in _find_all(text, SWITCH):
-            after = text[hit + len(SWITCH) : hit + len(SWITCH) + 1]
-            if after == "_":
+        start = 0
+        while True:
+            hit = text.find(SWITCH, start)
+            if hit < 0:
+                break
+            start = hit + len(SWITCH)
+            if text[hit + len(SWITCH) : hit + len(SWITCH) + 1] == "_":
                 continue
             if rel not in SWITCH_ALLOWED:
-                line = text[:hit].count(chr(10)) + 1
-                offenders.append(f"{rel}:{line}")
-    check(not offenders, "bare VLLM_ASCEND_CP_BALANCE is only read by the eligibility predicate", offenders)
+                offenders.append("%s:%d" % (rel, text[:hit].count(chr(10)) + 1))
+    check(not offenders, "bare VLLM_ASCEND_CP_BALANCE is only read by envs.py / the eligibility predicate", offenders)
 
-    sfa = src("attention/sfa_v1.py")
-    body = _function_body(sfa, "def _q_proj_and_k_up_proj")
-    check(FUSED in body, "q_up_proj keeps the fused transpose-batchmatmul branch")
-    check(
-        "perm_x1=(1, 0, 2)," in body and "perm_x2=(0, 1, 2)," in body and "perm_y=(1, 0, 2)," in body,
-        "q_up_proj fused op uses the base-branch permutations",
-    )
-    check("torch.bmm(q_nope, self.W_UK_T)" in body, "q_up_proj keeps the bmm fallback")
-
+    # 6. 与 base 对照：移植没有动过融合 q_up 分支
     if args.base_repo:
         base_file = Path(args.base_repo) / "vllm_ascend/attention/sfa_v1.py"
         if not base_file.is_file():
-            check(
-                False,
-                f"base checkout not readable: {base_file} (pass --base-repo <vllm-ascend-base "
-                "checkout>, or omit the flag to run only the zigzag-gating assertions)",
-            )
+            check(False, f"base checkout not readable: {base_file}")
         else:
-            base_body = _function_body(base_file.read_text(encoding="utf-8"), "def _q_proj_and_k_up_proj")
+            marker = "def _q_proj_and_k_up_proj"
             check(
-                FUSED in base_body and _fused_block(body) == _fused_block(base_body),
-                "q_up_proj fused block is byte-identical to the base branch",
+                function_body(src("attention/sfa_v1.py"), marker)
+                == function_body(base_file.read_text(encoding="utf-8"), marker),
+                "q_up_proj body is byte-identical to the base checkout",
             )
 
     print(f"[check] RESULT: {'FAIL' if failures else 'PASS'}")
