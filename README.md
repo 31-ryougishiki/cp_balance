@@ -474,3 +474,18 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 | `tests/smoke/*.sh` | 冒烟：环境、配置解析、路径、端口、磁盘、静态门控、服务就绪、ZIGZAG 请求 |
 | `tests/accuracy/*.sh` | 精度：矩阵门禁（C/B/nomtp）、对比复跑、slot<0 补丁 A/B |
 | `tests/perf/*.sh` | 性能：采集、解析、窗口单步审计、对比报告、顺序归因、打包 |
+
+## A5 一键验证（新 main 线）
+
+```bash
+cd /home/z30055003/cp_balance
+export CP_BALANCE_LOCAL_IP=$(ip -o -4 addr show | awk '$2!="lo"{print $4}' | cut -d/ -f1 | head -1)
+export CP_BALANCE_NIC_NAME=$(ip -o -4 addr show | awk '$2!="lo"{print $2}' | head -1)
+bash verify_a5.sh                 # 前置 -> --tag fast -> 起服务冒烟 -> 分支诊断 -> 打包
+bash verify_a5.sh --skip-smoke    # 不起服务；--diag-only 只抓最近一轮证据
+```
+
+只需 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME`（可选 `CP_BALANCE_DEVICES` / `CP_BALANCE_REPO` /
+`CP_BALANCE_BASE_REPO` / `HX_READY_TRIES`）；family 脚本自己设成 a5，`VLLM_USE_V2_MODEL_RUNNER=0` 在
+`configs/_common_a5.json` 里，`VLLM_ASCEND_CP_BALANCE*` 由配置的 cp_balance/min_tokens/reduce_mode/debug 字段导出。
+判据：静态/冒烟 FAIL，或诊断里没有 `branch=ZIGZAG`（尤其 `reason=dp>1`）都算不通过，证据包 `verify_a5_*.tgz`。
