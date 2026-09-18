@@ -94,6 +94,22 @@ fi
 if [ -f "$BASE_REPO/vllm_ascend/envs.py" ] && grep -q VLLM_ASCEND_CP_BALANCE "$BASE_REPO/vllm_ascend/envs.py"; then
   bad "对照树里也有 CP_BALANCE：对照树应是原版 main"
 fi
+# 构建产物：_build_info.py 由 setup.py 生成，缺了服务会在 import 阶段就死
+if [ -f "$CUR_REPO/vllm_ascend/__init__.py" ] && [ ! -f "$CUR_REPO/vllm_ascend/_build_info.py" ]; then
+  bad "被测树缺构建产物 vllm_ascend/_build_info.py（服务会 ImportError: cannot import name '_build_info'）"
+  cat <<'EOF'
+  说明这棵树没有在本机构建/安装过（harness 用 PYTHONPATH 直接指到这棵树）。修法任选：
+    a) 重新构建（推荐，同时生成 C 扩展）：
+         cd <被测树> && source <CANN 路径>/set_env.sh && pip install -e . --no-build-isolation
+    b) 临时从同机对照树拷（该文件只跟芯片型号有关，与本仓代码无关）：
+         cp <对照树>/vllm_ascend/_build_info.py <被测树>/vllm_ascend/
+  验证：PYTHONPATH=<被测树> python3 -c "import vllm_ascend._build_info as b; print(b.__device_type__)"
+EOF
+fi
+if [ -d "$CUR_REPO/vllm_ascend" ] && ! ls "$CUR_REPO"/vllm_ascend/vllm_ascend_C*.so >/dev/null 2>&1; then
+  warn "被测树里没有 vllm_ascend_C 扩展（vllm_ascend_C*.so）：如果后续报自定义算子缺失，按上面 a) 重新构建"
+fi
+
 note "vllm 版本: $(python3 -c 'import vllm;print(vllm.__version__)' 2>&1 | tail -1)"
 note "SOC: $(python3 -c 'import torch_npu;print(torch_npu.npu.get_soc_version())' 2>&1 | tail -1)"
 df -h "$HERE" | tail -1

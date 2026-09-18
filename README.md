@@ -496,3 +496,9 @@ bash verify_a5.sh --skip-smoke    # 不起服务；--diag-only 只抓最近一�
 `SIOCGIFADDR`（纯 Python，无需 ip/ifconfig）→ `psutil` → `ip -o -4 addr` → `ifconfig -a` → `hostname -I`，
 过滤 lo/docker*/veth*/br-*/169.254.*；`python3 tests/lib/netif.py` 可列出全部候选。
 设备同理：`devices` 留空或写 `auto` 时取容器里的 `ASCEND_RT_VISIBLE_DEVICES`。
+
+换代码树 / 新 clone 之后必须在树里构建一次，否则服务起不来：
+`_build_info.py` 是 `setup.py` 生成的（内容只有 `__device_type__`），源码树里没有，harness 用
+`PYTHONPATH` 直接指树，缺了就在 import 阶段报 `cannot import name '_build_info'`。
+`verify_a5.sh` 的前置检查会直接指出来；修法：`cd <树> && source <CANN>/set_env.sh && pip install -e . --no-build-isolation`
+（同机对照树里有该文件时可临时 `cp <对照树>/vllm_ascend/_build_info.py <树>/vllm_ascend/`）。
