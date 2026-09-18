@@ -47,6 +47,7 @@
     "--no-enable-prefix-caching"
   ],
   "env": {
+    "VLLM_USE_V2_MODEL_RUNNER": "0",
     "HCCL_ALGO": "level0:fullmesh",
     "HCCL_BUFFSIZE": "1200",
     "VLLM_RPC_TIMEOUT": "3600000",
