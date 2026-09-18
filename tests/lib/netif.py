@@ -3,6 +3,8 @@
 
     python3 tests/lib/netif.py            # 候选列表：iface<TAB>ip<TAB>default?
     python3 tests/lib/netif.py --best     # 最佳候选：iface<TAB>ip（没有则 exit 1）
+    python3 tests/lib/netif.py --ifaces   # 只列网卡名
+    python3 tests/lib/netif.py --debug    # 每个来源返回什么（排查容器）
     python3 tests/lib/netif.py --list-json
 
 识别顺序（合并去重）：psutil.net_if_addrs() -> ip -o -4 addr show -> ifconfig -a；
@@ -16,6 +18,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -88,6 +92,8 @@ def _from_psutil() -> list[tuple[str, str]]:
 
 def _from_ip_command() -> list[tuple[str, str]]:
     try:
+        if shutil.which("ip") is None:
+            return []
         text = subprocess.run(
             ["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=5, check=False
         ).stdout
@@ -104,6 +110,8 @@ def _from_ip_command() -> list[tuple[str, str]]:
 
 def _from_ifconfig() -> list[tuple[str, str]]:
     try:
+        if shutil.which("ifconfig") is None:
+            return []
         text = subprocess.run(["ifconfig", "-a"], capture_output=True, text=True, timeout=5, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         return []
@@ -118,9 +126,51 @@ def _from_ifconfig() -> list[tuple[str, str]]:
     return out
 
 
+def _iface_names() -> list[str]:
+    """Interface names without calling any external command."""
+    try:
+        return [name for _idx, name in socket.if_nameindex()]
+    except Exception:
+        pass
+    try:
+        return sorted(p.name for p in Path("/sys/class/net").iterdir())
+    except OSError:
+        return []
+
+
+def physical_iface() -> str | None:
+    """The only non-virtual interface, when there is exactly one."""
+    names = [n for n in _iface_names() if not SKIP_IFACE.match(n) and not VIRTUAL_IFACE.match(n)]
+    return names[0] if len(names) == 1 else None
+
+
+def _from_fib_trie() -> list[tuple[str, str]]:
+    """Pure file-read fallback: /proc/net/fib_trie is readable in containers."""
+    try:
+        text = Path("/proc/net/fib_trie").read_text()
+    except OSError:
+        return []
+    ips: list[str] = []
+    last_ip: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = re.match(r"\|-- (\d+\.\d+\.\d+\.\d+)$", stripped)
+        if match:
+            last_ip = match.group(1)
+            continue
+        if last_ip and stripped.endswith("/32 host LOCAL"):
+            if last_ip not in ips:
+                ips.append(last_ip)
+            last_ip = None
+    iface = physical_iface() or ""
+    return [(iface, ip) for ip in ips]
+
+
 def _from_hostname() -> list[tuple[str, str]]:
     """Last resort: 'hostname -I' has IPs but no interface names."""
     try:
+        if shutil.which("hostname") is None:
+            return []
         text = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         return []
@@ -130,14 +180,17 @@ def _from_hostname() -> list[tuple[str, str]]:
 def candidates() -> list[dict]:
     default = default_route_iface()
     seen: dict[tuple[str, str], dict] = {}
+    fallback_iface = physical_iface() or ""
     for source in (
         _from_ioctl(),
         _from_psutil(),
         _from_ip_command(),
         _from_ifconfig(),
+        _from_fib_trie(),
         _from_hostname(),
     ):
-        for iface, ip in source:
+        for raw_iface, ip in source:
+            iface = raw_iface or fallback_iface
             if not iface or SKIP_IFACE.match(iface) or VIRTUAL_IFACE.match(iface):
                 continue
             try:
@@ -165,6 +218,24 @@ def best() -> dict | None:
 
 
 def main() -> int:
+    if "--ifaces" in sys.argv:
+        for name in _iface_names():
+            print(name)
+        return 0
+    if "--debug" in sys.argv:
+        for label, source in (
+            ("ioctl", _from_ioctl),
+            ("psutil", _from_psutil),
+            ("ip", _from_ip_command),
+            ("ifconfig", _from_ifconfig),
+            ("fib_trie", _from_fib_trie),
+            ("hostname", _from_hostname),
+        ):
+            print(f"{label}: {source()}", file=sys.stderr)
+        print(f"default_route_iface={default_route_iface()!r} physical_iface={physical_iface()!r}", file=sys.stderr)
+        print(f"ip(which)={shutil.which('ip')} ifconfig={shutil.which('ifconfig')} hostname={shutil.which('hostname')}",
+              file=sys.stderr)
+        return 0
     if "--best" in sys.argv:
         item = best()
         if item is None:
