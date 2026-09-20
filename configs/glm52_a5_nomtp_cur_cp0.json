@@ -1,7 +1,7 @@
 {
   "extends": "_common_a5.json",
   "name": "glm52_a5_nomtp_cur_cp0",
-  "repo": "/home/z30055003/vllm-ascend",
+  "repo": "../vllm-ascend",
   "port": 8039,
   "cp_balance": 0
 }

@@ -502,3 +502,17 @@ bash verify_a5.sh --skip-smoke    # 不起服务；--diag-only 只抓最近一�
 `PYTHONPATH` 直接指树，缺了就在 import 阶段报 `cannot import name '_build_info'`。
 `verify_a5.sh` 的前置检查会直接指出来；修法：`cd <树> && source <CANN>/set_env.sh && pip install -e . --no-build-isolation`
 （同机对照树里有该文件时可临时 `cp <对照树>/vllm_ascend/_build_info.py <树>/vllm_ascend/`）。
+
+
+## 目录布局
+
+harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-ascend、../vllm-ascend-base），
+由 serve_config.absolutize() 按 harness 目录绝对化，所以整套目录搬走只要三棵树还在一起：
+
+    <workdir>/
+      cp_balance/        harness（本仓）
+      vllm-ascend/       被测树（cp_balance 分支）
+      vllm-ascend-base/  对照树（main 分支）
+
+换机器/换目录后只需要 CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME（容器里可留空自动识别）；
+树不在兄弟位置时用 CP_BALANCE_REPO / CP_BALANCE_BASE_REPO 覆盖，或改配置里的相对路径。

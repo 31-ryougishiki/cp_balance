@@ -117,6 +117,23 @@ def detect_netif() -> tuple[str | None, str | None]:
     return item["iface"], item["ip"]
 
 
+def absolutize(cfg: dict) -> dict:
+    """Resolve tree / model / profiler paths relative to the harness dir.
+
+    The checkouts normally sit next to the harness (../vllm-ascend), which makes
+    the configs machine independent; PYTHONPATH and the service argv still need
+    absolute paths.
+    """
+    for key in ("repo", "model"):
+        value = cfg.get(key)
+        if value and not (os.path.isabs(str(value)) or str(value).startswith("/")):
+            cfg[key] = str((HERE / str(value)).resolve())
+    profiler = cfg.get("profiler")
+    if isinstance(profiler, dict) and profiler.get("dir") and not os.path.isabs(str(profiler["dir"])):
+        profiler["dir"] = str((HERE / str(profiler["dir"])).resolve())
+    return cfg
+
+
 def _is_auto(value) -> bool:
     return value is None or str(value).strip() in ("", "auto")
 
@@ -285,7 +302,7 @@ def main() -> int:
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="override a config field")
     args = parser.parse_args()
 
-    cfg = apply_env_overrides(load_config(args.config))
+    cfg = absolutize(apply_env_overrides(load_config(args.config)))
     for expr in args.set:
         apply_set(cfg, expr)
     env = build_env(cfg)

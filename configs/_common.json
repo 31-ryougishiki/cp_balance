@@ -1,6 +1,6 @@
 {
   "name": "_common",
-  "repo": "/opt/its/z30055003/vllm-ascend",
+  "repo": "../vllm-ascend",
   "model": "/opt/its/model/GLM-5.2-W4A8C8",
   "served_model_name": "glm glm-52",
   "host": "0.0.0.0",

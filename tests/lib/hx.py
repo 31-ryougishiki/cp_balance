@@ -28,7 +28,9 @@ import serve_config as sc  # noqa: E402
 
 
 def effective(name: str) -> dict:
-    return sc.apply_env_overrides(sc.load_config(name))
+    # Same normalization as the launcher: auto NIC/IP plus sibling-relative
+    # tree / model / profiler paths resolved against the harness directory.
+    return sc.absolutize(sc.apply_env_overrides(sc.load_config(name)))
 
 
 def cmd_configs(family: str) -> int:

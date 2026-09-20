@@ -1,7 +1,7 @@
 {
   "extends": "_profile_l6_common.json",
   "name": "prof_l6_base_cp0",
-  "repo": "/opt/its/z30055003/vllm-ascend-base",
+  "repo": "../vllm-ascend-base",
   "port": 8036,
   "cp_balance": 0,
   "profiler": {

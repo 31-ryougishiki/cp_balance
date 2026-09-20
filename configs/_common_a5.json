@@ -1,6 +1,6 @@
 {
   "name": "_common_a5",
-  "repo": "/home/z30055003/vllm-ascend",
+  "repo": "../vllm-ascend",
   "model": "/mnt/share/weights/GLM-5.2-w4a4c8-mxfp4",
   "served_model_name": "glm glm-52",
   "host": "0.0.0.0",
