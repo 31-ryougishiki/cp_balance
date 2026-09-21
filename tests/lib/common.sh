@@ -7,6 +7,10 @@ HX_PY="python3 $HARNESS_ROOT/tests/lib/hx.py"
 HX_ROLES=$HX_LIB/roles.tsv
 
 : "${CP_BALANCE_FAMILY:=a5}"
+# 远端常设 http_proxy/https_proxy 又没有 no_proxy：那会把 127.0.0.1 的就绪探测也发给代理，
+# 服务明明起来了却一直等不到 ready。这里给本机地址开白名单（外网流量仍走代理）。
+no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"; export no_proxy
+NO_PROXY="$no_proxy"; export NO_PROXY
 : "${HARNESS_OUT:=$HARNESS_ROOT/tests/_out/$(date +%m%d_%H%M%S)}"
 # 超时/阈值来自 harness.json limits（环境变量仍可覆盖）
 hx_limit() { $HX_PY limit "$1" 2>/dev/null | tr -d '\r'; }
@@ -115,7 +119,7 @@ hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout
   HX_PID=$!
   # 服务起停约 10 分钟，重试上限见 harness.json limits.ready_tries（HX_READY_TRIES 可覆盖）
   for i in $(seq 1 "$HX_READY_TRIES"); do
-    curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null && break
+    curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null && break
     if [ -n "$HX_PID" ] && ! kill -0 "$HX_PID" 2>/dev/null; then
       echo "[FAIL] $cfg exited before it became ready (pid $HX_PID); tail of $log:" >&2
       tail -n 20 "$log" >&2
@@ -124,7 +128,7 @@ hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout
     fi
     sleep "$HX_READY_SLEEP"
   done
-  if ! curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null; then
+  if ! curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null; then
     echo "[FAIL] $cfg not ready on port $port after $((HX_READY_TRIES * HX_READY_SLEEP))s; tail of $log:" >&2
     tail -n 20 "$log" >&2
     return 1
@@ -144,7 +148,7 @@ hx_service_down() {  # <port>：端口已停返回 0，HX_STOP_TRIES*HX_STOP_SLE
   fi
   pkill -f -- "--port $port" >/dev/null 2>&1
   for i in $(seq 1 "$HX_STOP_TRIES"); do
-    if ! curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null; then
+    if ! curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null; then
       HX_PORT=""
       return 0
     fi

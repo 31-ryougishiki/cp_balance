@@ -25,6 +25,11 @@ bash verify.sh --family a5 --live-log # 同上，另外把测试与模型服务�
 
 诊断是 `VERDICT=KNOWN Disabling DSA-CP` → 说明树没带 dp=1 的门修或补丁没打上，先修树，别往下走。
 
+若服务日志显示已经起来、测试却一直不往下走：先看环境里有没有 `http_proxy`（远端常见，且没有 `no_proxy`）。
+这会把 `curl 127.0.0.1:<port>/v1/models` 的就绪探测发给代理，测试就一直等到超时。
+harness 已经在 `common.sh` / `verify.sh` / `serve_config.py` 里给本机地址开了白名单（`127.0.0.1,localhost,::1`），
+手工 curl 时记得加 `--noproxy '*'`。
+
 若前置报缺 `vllm_ascend/_build_info.py`：那是 `setup.py` 生成的、只跟芯片型号有关的一行文件（不是编译产物），
 **只改过 py 不需要重编译**。`CP_BALANCE_AUTO_BUILD=copy` 可从同芯片的兄弟树拷过来，或者手工 `cp`；
 只有新 clone 才需要在该树跑一次 `pip install -e . --no-build-isolation`（顺带生成 C 扩展）。

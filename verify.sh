@@ -47,6 +47,9 @@ case " $FAMILIES " in
   *) echo "verify: --family 只能是 $FAMILIES（当前 '$FAMILY'）" >&2; exit 2 ;;
 esac
 export CP_BALANCE_FAMILY=$FAMILY
+# 远端有 http_proxy 时，本机地址必须绕开代理（否则就绪探测被发到代理）
+no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"; export no_proxy
+NO_PROXY="$no_proxy"; export NO_PROXY
 export HX_LIVE_LOG=${HX_LIVE_LOG:-0}
 
 STAMP=$(date +%m%d_%H%M%S)_$$

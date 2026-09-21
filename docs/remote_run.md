@@ -157,4 +157,6 @@ ls -lh acc_*.tgz perf_*.tgz verify_*.tar.gz
 - `--only` / `--skip` / `--from` 都支持目录名（`smoke` / `accuracy` / `perf`）；
 - 选择器一个都没命中、或选项缺参数，runner 退出码 2 并打印原因（不会静默跳过）；
 - 判定看各测试自己的 `[done] ... PASS/FAIL`，以及 `status.tsv`（PASS/FAIL/SKIP + 耗时）；
-- 服务残留（测试被打断）：`pkill -f -- "--port 8035"`；正常路径上 `common.sh` 的 EXIT trap 会自己收尾。
+- 服务残留（测试被打断）：`pkill -f -- "--port 8035"`；正常路径上 `common.sh` 的 EXIT trap 会自己收尾；
+- 就绪探测走 `127.0.0.1`：远端若有 `http_proxy` 而没有 `no_proxy`，探测会被发到代理（表现为"服务明明起来了，测试不往下走"）。
+  harness 已内置本机白名单，手工 curl 请加 `--noproxy '*'`。

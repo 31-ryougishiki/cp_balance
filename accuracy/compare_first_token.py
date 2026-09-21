@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -33,6 +34,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+# 远端常设 http_proxy：本机地址绕开代理（与 serve_config/common.sh 同一口径）
+for _proxy_key in ("no_proxy", "NO_PROXY"):
+    _parts = [part for part in os.environ.get(_proxy_key, "").split(",") if part]
+    for _host in ("127.0.0.1", "localhost", "::1"):
+        if _host not in _parts:
+            _parts.append(_host)
+    os.environ[_proxy_key] = ",".join(_parts)
 
 DEFAULT_QUESTIONS = Path(__file__).resolve().parent.parent / "questions.json"
 

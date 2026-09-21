@@ -33,6 +33,13 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# 远端常设 http_proxy：本机地址要绕开它，否则就绪探测/接口调用会被发到代理上
+for _proxy_key in ("no_proxy", "NO_PROXY"):
+    _parts = [part for part in os.environ.get(_proxy_key, "").split(",") if part]
+    for _host in ("127.0.0.1", "localhost", "::1"):
+        if _host not in _parts:
+            _parts.append(_host)
+    os.environ[_proxy_key] = ",".join(_parts)
 CONFIG_DIR = HERE / "configs"
 HARNESS_CONFIG = HERE / "harness.json"
 # Defaults only; a config's "deterministic_env" (or harness.json serve.deterministic_env)
