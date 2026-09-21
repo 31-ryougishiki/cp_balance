@@ -127,11 +127,11 @@
       "known": [
         {
           "match": "Disabling DSA-CP",
-          "message": "enable_dsa_cp 在 ascend_config 里被关掉（use_sequence_parallel_moe=False；main 上它要求 data_parallel_size>1，而部署是 dp=1）→ DSA-CP 整条路径没跑，必须先解决 A-B1，再谈 zigzag"
+          "message": "enable_dsa_cp 被 ascend_config 关掉（use_sequence_parallel_moe=False，dp=1 时恒假）。两个树都应带 dp=1 的门修：被测树看 cp_balance 分支，参照树靠 trees.base.patches/dsa_cp_dp1.patch；出现这行说明树不对或补丁没打上"
         },
         {
           "match": "reason=dp>1",
-          "message": "zigzag 资格门拒绝 dp>1（ascend_config 又要求 dp>1 才开 DSA-CP）→ A-B1 自相矛盾"
+          "message": "zigzag 资格门拒绝 dp>1。这些机器是 tp8/tp16 + dp=1 部署，出现它就说明启动参数/配置把 data_parallel_size 设成了 >1"
         },
         {
           "match": "reason=flag_off",
