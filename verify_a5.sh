@@ -89,10 +89,10 @@ hx_need_dir "对照代码树" "$BASE_REPO"
 hx_need_dir "权重" "$MODEL"
 # 代码版本对齐：不在目标分支/目标 commit 上就自动切过去（tests/lib/targets.tsv 定义目标分支）
 . "$HERE/tests/lib/sync_tree.sh"
-if [ "%%{CP_BALANCE_AUTO_CHECKOUT:-1}" = "1" ]; then
+if [ "${CP_BALANCE_AUTO_CHECKOUT:-1}" = "1" ]; then
   for pair in "cur=$CUR_REPO" "base=$BASE_REPO"; do
-    role=%%{pair%%=*}
-    dir=%%{pair#*=}
+    role=${pair%%=*}
+    dir=${pair#*=}
     [ -n "$dir" ] || continue
     branch=$(hx_tree_branch "$role" || true)
     if [ -z "$branch" ]; then

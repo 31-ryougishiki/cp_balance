@@ -516,3 +516,15 @@ harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-a
 
 换机器/换目录后只需要 CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME（容器里可留空自动识别）；
 树不在兄弟位置时用 CP_BALANCE_REPO / CP_BALANCE_BASE_REPO 覆盖，或改配置里的相对路径。
+
+## 代码版本自动对齐
+
+tests/lib/targets.tsv 定义目标分支（cur = cp_balance，base = main）；tests/lib/sync_tree.sh
+提供 hx_sync_tree <路径> <分支> [远端]：先 git fetch，再比对 HEAD/分支，不一致就
+checkout <分支> + reset --hard <远端>/<分支>。
+
+- verify_a5.sh 前置检查里对两棵树各跑一次，失败记 FAIL；
+- 脏树（有未提交改动）拒绝自动切换并列改动；切换前打印将被丢弃的本地提交（reflog 可找回）；
+- CP_BALANCE_AUTO_CHECKOUT=0 只报告不切换；
+- 单独用：bash -c ". tests/lib/sync_tree.sh; hx_sync_tree ../vllm-ascend cp_balance origin"；
+- 切完版本后树里若没有构建产物（vllm_ascend/_build_info.py），verify_a5.sh 会接着提示重新构建。
