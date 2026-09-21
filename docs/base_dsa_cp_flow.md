@@ -1,7 +1,7 @@
 > 历史文档（2026-09 上旬的交接/评审期记录）：结论可能已过时，当前状态以 `docs/scripts_review.md` 为准。
 >
 > 已变事实（2026-09-21 更正）：
-> - 本文写的是 base_layer3（`c7990e5e4` 那棵）。当前参照树 = `vllm-ascend-base`@main(aff1b74b6) + harness 自动打 `patches/dsa_cp_dp1.patch`；
+> - 本文写的是 base_layer3（`c7990e5e4` 那棵）。当前参照树 = `vllm-ascend-base`@`base-dp1`（= main aff1b74b6 + dp=1 门修一行）；
 >   连续切片的实现已经搬到 `attention/context_parallel/sfa_cp.py`，行号只对 base_layer3 有效。
 > - 配置已重构：公共段在 `configs/_base.json`（族差异在 `_common*.json`）；`VLLM_ASCEND_ENABLE_PREFETCH_MLP` 已按定案删除；
 >   “无 MTP”只对 A3 的 svc 配置成立，A5 的 `glm52_a5_cur_cp1` 继承 `_common_a5_mtp.json`（deepseek_mtp）。

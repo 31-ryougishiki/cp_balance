@@ -2,7 +2,7 @@
 >
 > 已变事实（2026-09-21 更正）：
 > - 本文针对 pre-port 树（658b836ba/c7990e5e4）；现被测树 = `cp_balance` b64c9569b（main 之上移植），
->   行号/类名不可直接引用（DSA-CP 段已移到 `attention/context_parallel/sfa_cp.py`）；对照树 = main aff1b74b6 + `patches/dsa_cp_dp1.patch`。
+>   行号/类名不可直接引用（DSA-CP 段已移到 `attention/context_parallel/sfa_cp.py`）；对照树 = `base-dp1`（main aff1b74b6 + dp=1 门修一行）。
 > - §0 A1：移植后 `fixed_order_reduce_scatter` 只被 `ops/linear_op.py` 与 `ops/fused_moe/shared_experts.py` 调用，
 >   不再经过 `mutates_args=[]` 的 custom op，那条冲突已不存在；就地 all_reduce + 视图返回仍在且是有意为之。
 > - §4 #3 的 `bash accuracy/run_matrix.sh …` 已删，改用 `bash tests/run_tests.sh --only accuracy/a10_matrix_gate`。

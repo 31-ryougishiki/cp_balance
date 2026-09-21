@@ -9,7 +9,7 @@
 | --- | --- | --- | --- |
 | harness（本仓） | `main` | `522fe76` | 启动/配置/测试脚手架 + 工程文档 |
 | vllm-ascend（被测） | `cp_balance` | `b64c9569b` | 移植版 + 本地 4 个修复（见 §3） |
-| vllm-ascend-base（参照） | `main` | `aff1b74b6` + 补丁 | 补丁 = `patches/dsa_cp_dp1.patch`（dp=1 放开门），harness 自动打 |
+| vllm-ascend-base（参照） | `base-dp1` | `1bf45408f` | = main aff1b74b6 + dp=1 放开门一行；harness 自动对齐到这个分支 |
 | vllm | 固定 commit | `84030bbe3d` | `harness.json trees.vllm`，`required=false` |
 
 - 机器：默认 A5（8 卡，`GLM-5.2-w4a4c8-mxfp4`，TP8）；A3（16 卡，`GLM-5.2-W4A8C8`，TP16）用 `--family a3`。
@@ -73,7 +73,7 @@ harness 侧（本仓，主要提交）：`e9e943a` 配置化 + 一批假 PASS/�
 
 1. A5 profile 的 `deterministic=false` 不动（结论里注明"性能数字不是服务同款设置"）。
 2. `VLLM_RPC_TIMEOUT` / `VLLM_ASCEND_ENABLE_PREFETCH_MLP` 已删（两个树里都没有消费者）。
-3. 参照树补丁走 `harness.json trees.base.patches`，不改 fork 的 main。
+3. 参照树的 dp=1 门修提交在 fork 的 `base-dp1` 分支（`harness.json trees.base.ref=base-dp1`），fork 的 main 保持与上游一致；要跟上游同步就把 main 快进后 rebase 这个分支。`trees.<角色>.patches` 机制保留但当前没人用。
 4. `round2_verify` 的补丁锚点不修，a30 永久 SKIP。
 5. MTP draft 的 `for_draft` 已接上（见 §3.3）。
 
@@ -89,5 +89,5 @@ harness 侧（本仓，主要提交）：`e9e943a` 配置化 + 一批假 PASS/�
 
 - 本地（Windows 开发机）**不跑服务**：服务/NPU/远端路径只能在远端验证，任何"能不能跑"的结论都要靠远端日志。
 - 本机可以 push（github 凭据可用）；远端只 pull harness，两棵代码树由 `verify.sh` 自动对齐。
-- 别手改参照树：`reset --hard` 后补丁由 harness 重打；要长期改就提到 fork 的 main（并删掉 `trees.base.patches`）。
+- 别手改参照树：harness 会 `reset --hard origin/base-dp1`；要改就改 `base-dp1` 分支并 push。
 - 文档已入仓 `docs/`，改文档请改仓内副本。

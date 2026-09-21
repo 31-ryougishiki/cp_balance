@@ -1,7 +1,7 @@
 # cp_balance 性能测量与优化方案
 
 对象：`vllm-ascend`（分支 `cp_balance`，当前 b64c9569b）相对 `vllm-ascend-base`
-（`main` aff1b74b6 + harness 自动打 `patches/dsa_cp_dp1.patch`）新增的 cp_balance。
+（`base-dp1` 分支 = `main` aff1b74b6 + dp=1 门修一行）新增的 cp_balance。
 模型 GLM-5.2-W4A8C8，TP16，DSA-CP（dp=1、SP 关闭；见 `docs/scripts_review.md` §4.1/§8）。
 
 已完成：一轮代码精简（第 4 节），diff vs base 从 2151/-513 行降到 1855/-511 行。

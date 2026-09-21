@@ -2,7 +2,7 @@
 >
 > 已变事实（2026-09-21 更正）：
 > - §C-H2「zigzag 资格门必然返回 dp>1 / zigzag 依旧不可达」已作废：dp=1 已定案，两个树都改了门（§4.1）。
-> - 远端取证不要再 grep `…Disabling DSA-CP.` 期望它出现：打过 `patches/dsa_cp_dp1.patch` 的树改成 info `DSA-CP is enabled without sequence-parallel MoE …`。
+> - 远端取证不要再 grep `…Disabling DSA-CP.` 期望它出现：两个树（被测树 commit、参照树 `base-dp1` 分支）都改成 info `DSA-CP is enabled without sequence-parallel MoE …`。
 > - §1 的 C-B1（`_embed_partial` 缺 return）与 C-B2（import 名）两条 BLOCKER 在当前树已修。
 > - 仍未修需跟踪：C-H1 站点 1（`_maybe_pad_and_reduce_impl` 无 zigzag 门控）、C-M2（indexer `_use_c8_reshape_optim` 无 zigzag 排除）、C-M1（docstring 仍称会重排 `input_ids`）。
 

@@ -77,7 +77,7 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate --keep-going
 | 什么 | 默认值 | 改哪里 |
 | --- | --- | --- |
 | 当前代码树 | `<workdir>/vllm-ascend` | `harness.json trees.cur.path`（配置里只写 `repo_tree: cur`；临时覆盖用 `CP_BALANCE_REPO`） |
-| base 代码树 | `<workdir>/vllm-ascend-base` | `harness.json trees.base.path`（配置里写 `repo_tree: base`；`CP_BALANCE_BASE_REPO` 可覆盖）。树不在时 harness 自动 clone/对齐，并打上 `trees.base.patches`（`patches/dsa_cp_dp1.patch`） |
+| base 代码树 | `<workdir>/vllm-ascend-base` | `harness.json trees.base.path`（配置里写 `repo_tree: base`；`CP_BALANCE_BASE_REPO` 可覆盖）。树不在时 harness 自动 clone/对齐到 fork 的 `base-dp1` 分支（= main aff1b74b6 + dp=1 门修一行） |
 | 模型 | `/mnt/share/weights/GLM-5.2-w4a4c8-mxfp4` | `_common_a5.json` 的 `model` |
 | vendor 环境 | `/mnt/share/l00622059/vendors/custom_transformer/bin/set_env.bash` | `_common_a5.json` 的 `prelude` |
 | 卡与并行度 | 8 卡（devices 0-7）、TP=8 | `_common_a5.json` 的 `devices` / `tp_size`（base 侧配置继承同一份公共配置） |
@@ -149,7 +149,7 @@ daemon，torch_npu 解析器拒绝在 daemon 里跑），脚本已经这么做�
 
 | # | 要确认 | 怎么看 | 不对时怎么办 |
 | --- | --- | --- | --- |
-| 1 | base 代码树路径 | `ls -d /home/z30055003/vllm-ascend-base`（由 harness 自动 clone/对齐 + 打 `trees.base.patches`） | 改 `harness.json trees.base.path`（临时覆盖 `CP_BALANCE_BASE_REPO`）；矩阵里只用 `static_check.base_tree` |
+| 1 | base 代码树路径 | `ls -d /home/z30055003/vllm-ascend-base`（由 harness 自动 clone/对齐到 `base-dp1` 分支） | 改 `harness.json trees.base.path`（临时覆盖 `CP_BALANCE_BASE_REPO`）；矩阵里只用 `static_check.base_tree` |
 | 2 | 长 prompt 真的进了 zigzag | 日志里 zigzag 证据计数 > 0：`branch=ZIGZAG` 或 `[CP_BALANCE][plan]`（两个串都受 DEBUG 门控；采集轮 `debug=0` 时不打） | 说明 prompt 不到 `MIN_TOKENS=2048`：用 `--set min_tokens=1536`（或 1024）重跑，并在结论里注明阈值。**已用 GLM-5.2 tokenizer 量过**：20 条长 prompt 是 2768~2781 token（会进 zigzag），20 条短 prompt 是 72~107 token（走连续切片） |
 | 3 | 8 卡 HCCL 组网正常 | 服务能起来、`/v1/models` 可访问；`HCCL_IF_IP` / `HCCL_SOCKET_IFNAME` 跟随现场机器身份（配置默认 `auto`） | 用 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME` 覆盖（`.104`/`eth2` 的口径见 `docs/a5_104_runbook.md` §0）；想写进配置就把 `_common_a5.json` 的 `local_ip` / `nic_name` 从 `auto` 改成具体值 |
 

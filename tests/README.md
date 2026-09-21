@@ -44,7 +44,7 @@ harness 级的数据只放在根目录 `harness.json`：
 | `expect` | 静态门控的期望值（如 ZigzagPlan 字段数） |
 
 `trees.<角色>.patches` 是树对齐后要打的补丁（`patches/*.patch`，相对 harness 根目录，幂等）：
-参照树要跟被测树跑在同一代 DSA-CP 语义上时用它，例如 `patches/dsa_cp_dp1.patch`（dp=1 允许开 DSA-CP）。
+参照树要跟被测树跑在同一代 DSA-CP 语义上时可以用它（当前没人用：参照树的 dp=1 门修提交在 `base-dp1` 分支上）。
 
 每条服务/矩阵配置仍然是 `configs/*.json`（模型/端口/开关/profiler），`repo` 不写路径而是
 `repo_tree: cur|base`，由 `harness.json trees` 解析。

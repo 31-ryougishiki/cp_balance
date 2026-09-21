@@ -1,5 +1,5 @@
 {
-  "_comment": "harness 级配置：目标代码树、机器族、超时/阈值、一键验证的步骤与判据。机器身份与模型在 configs/*.json。；trees.<角色>.patches 是树对齐后要打的补丁（相对 harness 目录，用来让参照树也能跑在 dp=1 的 DSA-CP 上）",
+  "_comment": "harness 级配置：目标代码树、机器族、超时/阈值、一键验证的步骤与判据。机器身份与模型在 configs/*.json。",
   "serve": {
     "vllm_bin": "vllm",
     "pythonunbuffered": true,
@@ -39,12 +39,9 @@
     "base": {
       "path": "../vllm-ascend-base",
       "remote": "https://github.com/31-ryougishiki/vllm-ascend.git",
-      "ref": "main",
+      "ref": "base-dp1",
       "kind": "tip",
-      "required": true,
-      "patches": [
-        "patches/dsa_cp_dp1.patch"
-      ]
+      "required": true
     },
     "vllm": {
       "path": "../vllm",
@@ -127,7 +124,7 @@
       "known": [
         {
           "match": "Disabling DSA-CP",
-          "message": "enable_dsa_cp 被 ascend_config 关掉（use_sequence_parallel_moe=False，dp=1 时恒假）。两个树都应带 dp=1 的门修：被测树看 cp_balance 分支，参照树靠 trees.base.patches/dsa_cp_dp1.patch；出现这行说明树不对或补丁没打上"
+          "message": "enable_dsa_cp 被 ascend_config 关掉（use_sequence_parallel_moe=False，dp=1 时恒假）。两个树都应带 dp=1 的门修：被测树看 cp_balance 分支，参照树看 base-dp1 分支；出现这行说明树的版本不对"
         },
         {
           "match": "reason=dp>1",

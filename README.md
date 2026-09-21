@@ -500,8 +500,8 @@ dp=1 的现状（两个树都带本地修复）：`enable_dsa_cp` 只判模型�
 连续切片（cp_balance=0）逻辑自洽，可以直接验收；zigzag（cp_balance=1）还差层内 MoE 的布局处理
 （原因与三条出路见 `docs/scripts_review.md` §8），建议先跑 cp0 把「DSA-CP 在 dp=1 成立」钉死，再决定 zigzag 怎么修。
 
-参照树（base）默认会打 `patches/dsa_cp_dp1.patch`（同一行门修），这样 B 等价性比较的是同一条 DSA-CP 路径；
-不想动参照树就把 `harness.json` 里 `trees.base.patches` 删掉（此时 B 对比只能当作「开了 DSA-CP vs 没开」看）。
+参照树（base）由 harness 对齐到 fork 的 `base-dp1` 分支（= main + 同一行门修），这样 B 等价性比较的是同一条 DSA-CP 路径；
+如果把它指回纯 `main`（改 `harness.json trees.base.ref`），B 对比就只能当作「开了 DSA-CP vs 没开」看。
 
 容器里 `local_ip` / `nic_name` 可以写成 `auto`（A5 公共配置已默认如此），解析顺序：环境变量
 `CP_BALANCE_LOCAL_IP`/`CP_BALANCE_NIC_NAME` > `configs/*.json` 里的具体值 > 自动识别。
@@ -552,8 +552,8 @@ harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-a
 - origin 不一致 → git remote set-url；
 - kind=tip → fetch 后 checkout <分支> + reset --hard origin/<分支>；kind=commit → checkout --detach <commit>；
 - 只有「真的要切换」时才拦脏树：已经对齐的树带着补丁也能继续用；切换前打印将被丢弃的提交（reflog 可找回）；
-- `patches`（可选）：对齐后按清单打补丁（幂等，已打上就跳过），用来让参照树和被测树跑在同一代语义上；
-  当前只有 `trees.base.patches = ["patches/dsa_cp_dp1.patch"]`（dp=1 允许开 DSA-CP）；
+- `patches`（可选）：对齐后按清单打补丁（幂等，已打上就跳过），给"没有分支可提交"的场景兜底；
+  当前没有树在用（参照树的 dp=1 门修已提交到 `base-dp1` 分支）；
 - CP_BALANCE_AUTO_CHECKOUT=0 只报告不切换。
 
 其它自动化：harness 自身干净且落后 origin/main 时 `git pull --ff-only`；权重路径不存在时列出本机候选

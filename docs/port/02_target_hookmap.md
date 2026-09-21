@@ -2,7 +2,7 @@
 >
 > 已变事实（2026-09-21 更正）：
 > - 本文的 T = `upstream/main` aff1b74b6；移植已落到 fork 的 `cp_balance`(b64c9569b)，上游 main 已到 d05255207。
-> - §1「DSA-CP validation requires index_topk + use_sequence_parallel_moe」：两个实际使用的树都已改成只判 `has_indexer`（base 走 `patches/dsa_cp_dp1.patch`）。
+> - §1「DSA-CP validation requires index_topk + use_sequence_parallel_moe」：两个实际使用的树都已改成只判 `has_indexer`（base 走 `base-dp1` 分支，同一行门修）。
 > - §3 建议补回的 `dp_world_size > 1` clause 已补回（`ascend_forward_context.py`），但 dp 门最终按「dp=1 是成立配置」定案，与 §1 结论相反。
 > - 「上游 PCP 才是 DSA-CP 的长期归宿」仍然成立（`context_parallel.md` 的迁移说明）。
 

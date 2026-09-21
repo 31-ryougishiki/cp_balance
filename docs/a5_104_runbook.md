@@ -70,7 +70,7 @@ git pull
 git log -1 --oneline
 
 git -C /home/z30055003/vllm-ascend      log -1 --oneline   # 待验树（cp_balance 分支；verify.sh 会自动对齐到 origin 上的 tip）
-git -C /home/z30055003/vllm-ascend-base log -1 --oneline   # 参照树 = main + trees.base.patches（dp=1 门补丁），也由 verify.sh 对齐
+git -C /home/z30055003/vllm-ascend-base log -1 --oneline   # 参照树 = fork 的 base-dp1 分支（main + dp=1 门修），也由 verify.sh 对齐
 
 df -h .                                                    # profiling 会写 GB 级 trace_view.json
 ```

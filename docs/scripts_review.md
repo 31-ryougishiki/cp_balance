@@ -10,7 +10,7 @@
 阻塞 3 条，都已处理（细节见各节）：
 
 1. `enable_dsa_cp` 在 dp=1 下被 `ascend_config.py:664` 的 `use_sequence_parallel_moe` 前置关掉 →
-   已确认 dp=1 是成立配置并改掉（被测树 commit、参照树走 `patches/dsa_cp_dp1.patch`），见 §4.1。
+   已确认 dp=1 是成立配置并改掉（被测树 commit、参照树走 `base-dp1` 分支），见 §4.1。
 2. 诊断/测试要的 `branch=ZIGZAG` 日志代码从来没打过（只有 `branch=CONTINUOUS` 与 `[CP_BALANCE][plan]`）→
    harness 侧两种都认，代码侧补了一行对称日志，见 §4.2。
 3. `harness.json` 曾被 `.gitignore` 的 `/*.json` 吞掉，远端 pull 下来会没有这个文件 → 已加白名单，见 §2。
@@ -157,13 +157,13 @@ MTP draft 的 `for_draft` 死代码（都列在对应小节的"待定"）。
 - 被测树 `vllm-ascend`（分支 cp_balance，commit `1b638aa2a`）：
   `enable_dsa_cp = enable_dsa_cp and has_indexer`；没有 SP-MoE 时打 `info_once`
   "using the native DSA-CP sharding path"（原来那句 "Disabling DSA-CP" 的 warning 去掉）。
-- 参照树 `vllm-ascend-base`：同样的一行改动，放在 harness 的 `patches/dsa_cp_dp1.patch`，
-  由 `harness.json trees.base.patches` 在树对齐后自动打（幂等：已经打上就跳过）。
+- 参照树 `vllm-ascend-base`：同样的一行改动提交在 fork 的 `base-dp1` 分支（commit `1bf45408f`），
+  `harness.json trees.base.ref=base-dp1`，verify.sh 自动对齐到它（`main` 保持与上游一致）。
   这样参照树也能真的跑 DSA-CP，B 等价性才比较的是"原版 DSA-CP vs cp_balance 关"，
   而不是"DSA-CP 关 vs DSA-CP 关"。参照树被 `verify.sh` 对齐（`reset --hard origin/main`）之后，
   补丁会重新打上，不会丢。
 - 如果更希望参照树保持"原版 main 不动"，把补丁前提到你 fork 的 main 上，然后删掉
-  `trees.base.patches` 即可（两种方式都行，别两边同时做）。
+  `trees.base.ref` 指回 `main` 即可（两种方式都行，别两边同时做）。`trees.<角色>.patches` 机制保留但当前没人用。
 
 顺带补的日志：`sfa_cp.py` 在 zigzag plan 成功后补 `[CP_BALANCE][branch] rank=%d branch=ZIGZAG reason=-`
 （DEBUG 门控，与资格门拒绝时的 CONTINUOUS 行对称），见 §4.2。
@@ -313,7 +313,7 @@ llm_base_proposer.py:2131-2140 也传同一个参数。新线 port 时只搬了 
 #   cp_balance  (harness)   -> origin/main
 #   vllm-ascend (被测树)    -> origin/cp_balance（否则 verify.sh 会把本地 commit reset 掉）
 cd <harness 目录>
-git pull                      # harness.json / verify.sh / patches/ 一起更新
+git pull                      # harness.json / verify.sh / docs/ 一起更新
 export CP_BALANCE_LOCAL_IP=<本机 IP> CP_BALANCE_NIC_NAME=<网卡>
 bash tests/run_tests.sh --tag fast          # 秒级自检（s03 会检查权重/树是否就位）
 bash verify.sh --family a5                  # 前置 -> 静态 -> 冒烟 -> 诊断 -> 打包
@@ -338,7 +338,7 @@ bash verify.sh --family a5 --diag-only
 
 1. A5 profile 的 deterministic:false —— 不动。性能采集与 A5 服务配置不是同一款设置，结论里要写明（对比数字时别当成服务同款）。
 2. VLLM_RPC_TIMEOUT / VLLM_ASCEND_ENABLE_PREFETCH_MLP —— 已删（configs/_base.json 少两个 env；指纹里的 ARGS 会变，属预期）。
-3. 参照树补丁 —— 走 harness 的 patches/dsa_cp_dp1.patch（保持现状），不额外改 fork 的 main；两条路只走一条。
+3. 参照树的门修 —— 提交在 fork 的 `base-dp1` 分支（`trees.base.ref=base-dp1`），fork 的 `main` 保持与上游一致；两条路只走一条。
 4. round2_verify 的补丁锚点 —— 不修。tests/accuracy/a30_slot_filter_ab 保持 SKIP（提示 driver stale），可选 A/B 不再纳入验收；a10/a20 的 C/B/噪声地板不受影响。
 5. MTP draft 的 for_draft —— 接上，见 4.3c。
 

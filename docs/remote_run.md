@@ -14,9 +14,9 @@
 ## 0. 前置
 
 代码树同步：harness 仓（`cp_balance`，分支 `main`）与被测树（`vllm-ascend`，分支 `cp_balance`）都要先 push；
-远端只做 `git pull`（需要 `harness.json`、`patches/`、`verify.sh` 一起更新）。
-参照树由 harness 按 `harness.json trees` 自动 clone/对齐，对齐后会按 `trees.base.patches`
-打上 `patches/dsa_cp_dp1.patch`（dp=1 允许开 DSA-CP），日志里会打印 `[sync] base 打上补丁 ...`。
+远端只做 `git pull`（拿到 `harness.json`、`verify.sh`、`docs/` 等）。
+参照树由 harness 按 `harness.json trees` 自动 clone/对齐到 fork 的 `base-dp1` 分支（= main + dp=1 门修一行），
+日志里会打印 `[sync] vllm-ascend-base 已在 base-dp1@...`（或 checkout/reset 的动作）。
 补丁只改 dp=1 那道门，不会往参照树里带 `VLLM_ASCEND_CP_BALANCE`（verify.sh 前置仍会查这一点）。
 
 每个 shell 先执行（换机器只改这三行）：
@@ -28,7 +28,7 @@ export CP_BALANCE_LOCAL_IP=7.246.78.75   # ip -o -4 addr show 查本机实际 IP
 export CP_BALANCE_NIC_NAME=eth2
 
 git -C /opt/its/z30055003/vllm-ascend      log -1 --oneline   # 待验树
-git -C /opt/its/z30055003/vllm-ascend-base log -1 --oneline   # 参照树：main + trees.base.patches（dp=1 门补丁，verify.sh 自动打）
+git -C /opt/its/z30055003/vllm-ascend-base log -1 --oneline   # 参照树：base-dp1 分支（main + dp=1 门修，verify.sh 自动对齐）
 df -h .                                                       # profiling 会写 GB 级 trace
 ```
 

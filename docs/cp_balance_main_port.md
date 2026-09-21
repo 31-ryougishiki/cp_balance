@@ -12,7 +12,7 @@
 | vllm-ascend | `cp_balance` = `b64c9569b` | 本次移植结果：upstream vllm-ascend main + zigzag 实现 + 本地 dp=1 门修/o_proj 出口/for_draft |
 | vllm-ascend | `cp_balance_v0.26.0rc` = `23ff2c23c` | 老实现（releases/v0.26.0rc 线），原样保留 |
 | vllm-ascend | `main`（本地） = `bb570591f` | 已不用；新基线是 `upstream/main` |
-| vllm-ascend-base | `main` = `aff1b74b6` + `patches/dsa_cp_dp1.patch` | 对照树（原版 main + dp=1 门修；补丁由 harness 在树对齐后自动打，别手改这棵树） |
+| vllm-ascend-base | `base-dp1` = `1bf45408f` | 对照树（main aff1b74b6 + dp=1 门修一行；由 harness 自动对齐，别手改这棵树） |
 | vllm-ascend-base | `base_layer3` = `c7990e5e4` | 老的打点树，保留备用 |
 | vllm | 分离头 `84030bbe3d` | vllm-ascend main 验证过的 vLLM commit |
 | vllm | `origin/main` = `9a70c233cd` | vllm main 最新（仍要求 `use_sequence_parallel_moe` 带 dp>1；pin 保持 84030bbe3d） |
@@ -95,7 +95,7 @@ git -C vllm-ascend fetch origin
 git -C vllm-ascend checkout cp_balance
 git -C vllm-ascend reset --hard origin/cp_balance      # b64c9569b
 
-# 对照树：交给 harness 对齐更省事（git clone/fetch + reset 到 origin/main + 自动打 patches/dsa_cp_dp1.patch）
+# 对照树：交给 harness 对齐更省事（git clone/fetch + reset 到 origin/base-dp1）
 git -C vllm-ascend-base fetch origin
 git -C vllm-ascend-base checkout main
 git -C vllm-ascend-base reset --hard origin/main       # aff1b74b6（补丁由 harness 在 verify.sh 里补打）

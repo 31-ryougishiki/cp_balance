@@ -14,7 +14,7 @@ bash verify.sh --family a5
 
 期望：
 
-- 前置阶段打印 `[sync] base 打上补丁 dsa_cp_dp1.patch`（参照树 = main + dp=1 门补丁）；
+- 前置阶段把参照树对齐到 fork 的 `base-dp1` 分支（= main + dp=1 门修），日志里有 `[sync] vllm-ascend-base 已在 base-dp1@...`；
 - 服务日志出现 `DSA-CP is enabled without sequence-parallel MoE (data_parallel_size=1)`，**不是** `Disabling DSA-CP`；
 - 诊断 `[diagnose] VERDICT=OK ...`（命中 `branch=ZIGZAG` 或 `[CP_BALANCE][plan]`）；
 - 产物：`verify_a5_<stamp>.tar.gz`（报告 + 这一轮 `tests/_out/<stamp>_a5/`）。
