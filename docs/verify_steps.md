@@ -12,6 +12,7 @@ export CP_BALANCE_LOCAL_IP=<本机 IP> CP_BALANCE_NIC_NAME=<网卡>   # 不设�
 bash verify.sh --family a5            # 默认：会拉起模型（smoke 阶段两次起停）
 bash verify.sh --family a5 --live-log # 同上，另外把测试与模型服务日志实时打屏
 # 只想看日志、不起服务：--skip-smoke（跳过冒烟）或 --diag-only（只对已有证据出诊断）
+# 服务整体那一段单独跳过：--skip-service
 ```
 
 期望：
@@ -64,7 +65,24 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
 
 顺带：MTP 的 draft 步会打 `branch=CONTINUOUS reason=draft`，出现它是正常的（显式守卫）。
 
-## 3. 阶段 3：性能（4 组 ≈ 3.5 小时 + 离线解析 ≈ 20 分钟）
+## 3. 阶段 3：服务整体（cp1/cp0 各一次并发突发，约 45 分钟）
+
+```bash
+bash tests/run_tests.sh --only service --skip service/sv30_soak,service/sv40_lifecycle --keep-going
+```
+
+判据：sv10 全过（契约与 4xx 错误路径）；sv20#cp1 与 #cp0 的 `[check] RESULT: PASS`（零失败 + 同 prompt 回复逐字一致）；
+sv21 的 `RESULT: PASS`（每个 batch 的 pad/actual/local 在 cp_size 个 rank 上一致、无 plan_error、至少一个 step 多序列）；
+sv22 的 `text match: N/N`（cp1 与 cp0 逐字相同）。sv21/sv22 报 SKIP 时先看 sv20 是不是没跑或没出计划行。
+
+与阶段 2 的关系：阶段 2 一次只发一条请求、只看首 token；这一段是并发突发，看的是整批的 rank 一致性与整段文本。
+顺序上先跑阶段 2 可以少一次起停，但两者是独立判据。
+
+回传：`tests/_out/<时间戳>_<family>/service/**`（sv20 的 results.json / check.txt / service.log、sv21 的 plan_*.txt 与 json、sv22 的 compare.txt）。
+
+重活（可选，各一次起停）：`--only service/sv30_soak`（长跑 + RSS/显存采样）、`--only service/sv40_lifecycle`（在飞停服 + 重启）。
+
+## 4. 阶段 4：性能（4 组 ≈ 3.5 小时 + 离线解析 ≈ 20 分钟）
 
 ```bash
 bash tests/run_tests.sh --only perf/p10_capture --skip perf/p10_capture#prof_a2a
@@ -86,13 +104,13 @@ bash tests/run_tests.sh --only perf/p20_analyse,perf/p21_window_single_step,perf
 - A5 的性能配置 `deterministic=false`（服务配置是 true），结论里要注明"性能数字不是服务同款设置"；
 - `p21_window_single_step` 当前恒 SKIP（trace 里 `kernel_details.csv` 没有 Step 列），`p24_collect` 只断言"有 tgz"。
 
-## 4. 回传什么
+## 5. 回传什么
 
 - 一键验证：`verify_a5_*.tar.gz`（自带上一步的整个 `tests/_out/<stamp>_a5/`）；
 - 性能：`collect_<时间戳>/*.tgz`（含 `summary.json`、`windows.json`、`order_rank0.json`、`export/`），原始 trace（GB 级）不拷；
 - 失败时另外带：`<id>.log`（合并日志）+ 诊断报告 `<PREFIX>_a5_branch_<stamp>.txt`。
 
-## 5. 判定汇总
+## 6. 判定汇总
 
 | 阶段 | 命令 | 通过判据 |
 | --- | --- | --- |

@@ -1,0 +1,6 @@
+{
+  "extends": "_common.json",
+  "name": "svc_a3_load_cp1",
+  "port": 8040,
+  "cp_balance": 1
+}

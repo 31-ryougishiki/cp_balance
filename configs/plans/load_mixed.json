@@ -1,0 +1,49 @@
+{
+  "_comment": "sv20 的并发突发：长短混排 + 同 prompt 重复（验证同批次内回复一致）；计划文件不是服务配置",
+  "name": "load_mixed",
+  "concurrency": 8,
+  "rounds": 1,
+  "requests": [
+    {
+      "id": "long00",
+      "prompt": "long:0",
+      "max_tokens": 32
+    },
+    {
+      "id": "long00_dup",
+      "prompt": "long:0",
+      "max_tokens": 32
+    },
+    {
+      "id": "long01",
+      "prompt": "long:1",
+      "max_tokens": 8
+    },
+    {
+      "id": "long02",
+      "prompt": "long:2",
+      "max_tokens": 8
+    },
+    {
+      "id": "long03",
+      "prompt": "long:3",
+      "max_tokens": 8
+    },
+    {
+      "id": "short00",
+      "prompt": "short:0",
+      "max_tokens": 4
+    },
+    {
+      "id": "short00_dup",
+      "prompt": "short:0",
+      "max_tokens": 4
+    },
+    {
+      "id": "short01_stream",
+      "prompt": "short:1",
+      "max_tokens": 4,
+      "stream": true
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/run_tests.sh —— 统一入口：发现 tests/{smoke,accuracy,perf}/*.sh，按脚本头部元数据
+# tests/run_tests.sh —— 统一入口：发现 tests/{smoke,accuracy,service,perf}/*.sh，按脚本头部元数据
 # （# desc/needs/tags/variants/est，见 tests/README.md）筛选、逐个执行、汇总。
 # 每个测试也能单独跑：bash tests/smoke/s02_config_resolve.sh
 # 退出码：0 全过；1 有 FAIL（--strict 时 SKIP 也算失败）；2 用法错、没发现测试、选择器一个都没命中。
@@ -103,7 +103,7 @@ sel_ok() {  # <index>：ONLY / SKIP / TAGS 三个筛选（list 与 run 共用）
 
 ids=(); files=(); variants=(); needs_list=(); tags_list=(); descs=(); ests=(); cmds=()
 n=0
-for f in "$HERE"/smoke/*.sh "$HERE"/accuracy/*.sh "$HERE"/perf/*.sh; do
+for f in "$HERE"/smoke/*.sh "$HERE"/accuracy/*.sh "$HERE"/service/*.sh "$HERE"/perf/*.sh; do
   [ -f "$f" ] || continue
   rel=${f#"$HERE"/}; rel=${rel%.sh}
   needs=$(meta "$f" needs); tags=$(meta "$f" tags); desc=$(meta "$f" desc)

@@ -16,6 +16,18 @@
     "profile_warmup": 2,
     "profile_requests": 4
   },
+  "service": {
+    "_comment": "服务级测试（tests/service/）：流量计划、长跑时长与阈值；计划文件在 configs/plans/ 下，不是服务配置",
+    "plan": "configs/plans/load_mixed.json",
+    "soak_plan": "configs/plans/load_soak.json",
+    "inflight_plan": "configs/plans/load_inflight.json",
+    "soak_minutes": 20,
+    "soak_sample_s": 60,
+    "min_reqs_per_step": 2,
+    "max_preemptions": 0,
+    "max_kv_usage_perc": 0.99,
+    "max_rss_growth_mb": 8192
+  },
   "families": {
     "a3": {
       "label": "A3 · 16 卡 · GLM-5.2-W4A8C8",
@@ -89,6 +101,22 @@
         ]
       },
       {
+        "id": "service",
+        "title": "服务整体：契约 + 并发突发 + 计划审计 + cp0/cp1 一致性（sv30/sv40 另跑）",
+        "skip_flag": "--skip-service",
+        "run": [
+          "bash",
+          "tests/run_tests.sh",
+          "--only",
+          "service",
+          "--skip",
+          "service/sv30_soak,service/sv40_lifecycle",
+          "--keep-going",
+          "--out",
+          "{out}"
+        ]
+      },
+      {
         "id": "diagnose",
         "title": "分支诊断",
         "builtin": "diagnose"
@@ -110,6 +138,11 @@
           "title": "[CP_BALANCE][plan] 行（最多 5 条）",
           "grep": "\\[CP_BALANCE\\]\\[plan\\].*",
           "post": "head5"
+        },
+        {
+          "title": "[planlog] 服务级计划审计行（去重，最多 20 条）",
+          "grep": "planlog",
+          "post": "sort_uniq_head20"
         },
         {
           "title": "DSA-CP / runner 相关行（去重，最多 20 条）",

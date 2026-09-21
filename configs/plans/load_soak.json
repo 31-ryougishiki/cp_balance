@@ -1,0 +1,38 @@
+{
+  "_comment": "sv30 长跑的每一轮：按 --duration 反复发这一组",
+  "name": "load_soak",
+  "concurrency": 6,
+  "rounds": 1,
+  "requests": [
+    {
+      "id": "long10",
+      "prompt": "long:4",
+      "max_tokens": 24
+    },
+    {
+      "id": "long10_dup",
+      "prompt": "long:4",
+      "max_tokens": 24
+    },
+    {
+      "id": "long11",
+      "prompt": "long:5",
+      "max_tokens": 8
+    },
+    {
+      "id": "short10",
+      "prompt": "short:2",
+      "max_tokens": 8
+    },
+    {
+      "id": "short10_dup",
+      "prompt": "short:2",
+      "max_tokens": 8
+    },
+    {
+      "id": "short11",
+      "prompt": "short:3",
+      "max_tokens": 8
+    }
+  ]
+}

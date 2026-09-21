@@ -1,0 +1,6 @@
+{
+  "extends": "_common_a5_mtp.json",
+  "name": "svc_a5_load_cp0",
+  "port": 8041,
+  "cp_balance": 0
+}

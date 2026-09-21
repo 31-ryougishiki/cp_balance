@@ -75,6 +75,31 @@ hx_end() {
   return 1
 }
 
+# ---- 服务级测试共用（tests/service/）：起服务 + HTTP 断言 + 阈值读取 + 上一轮产物 ----
+hx_svc_up() {  # <role|config>：成功导出 HX_CFG/HX_LOG/HX_PORT/HX_BASE，失败返回 1
+  HX_CFG=$(hx_resolve "$1") || return 1
+  [ -n "$HX_CFG" ] || return 1
+  HX_LOG=$HX_OUT/$HX_CFG.log
+  HX_PORT=$(hx_service_up "$HX_CFG" "$HX_LOG") || { HX_PORT=""; return 1; }
+  HX_BASE=http://127.0.0.1:$HX_PORT
+  export HX_CFG HX_LOG HX_PORT HX_BASE
+  return 0
+}
+
+hx_http_code() {  # 与 curl 同参数，只打印状态码（本机地址绕开代理）
+  curl -s --noproxy "*" -o /dev/null -w "%{http_code}" "$@"
+}
+
+hx_service_kv() {  # <harness.json service.<键>>：服务级阈值/计划文件，缺省打印空
+  $HX_PY harness "service.$1" 2>/dev/null
+}
+
+hx_prev_out() {  # <测试路径> <变体>：同一次 run 里前一个测试的产物目录，找不到就打印空
+  local dir=$HARNESS_OUT/$1.$2
+  if [ ! -d "$dir" ]; then dir=$(ls -dt "$HARNESS_OUT/$1.$2"* 2>/dev/null | head -1); fi
+  if [ -n "$dir" ] && [ -d "$dir" ]; then echo "$dir"; else echo ""; fi
+}
+
 hx_need_dir() {  # <标签> <路径>
   [ -n "$2" ] || { hx_fail "$1: not set in config"; return 0; }
   [ -d "$2" ] && hx_ok "$1 $2" || hx_fail "$1 missing: $2"

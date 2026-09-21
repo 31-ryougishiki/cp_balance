@@ -2,6 +2,8 @@
 # config 为 "-" 表示本族没有这个角色（测试据此 SKIP 而不是 FAIL）
 a3	svc	svc_cp0	glm52_cur_cp0
 a3	svc	svc_cp1	glm52_cur_cp1
+a3	svc	svc_load_cp0	svc_a3_load_cp0
+a3	svc	svc_load_cp1	svc_a3_load_cp1
 a3	matrix	c_matrix	configs/matrix_c_accept.json
 a3	matrix	b_matrix	configs/matrix_b_vs_base.json
 a3	matrix	nomtp_matrix	-
@@ -12,6 +14,8 @@ a3	prof	prof_base	prof_base_cp0
 a3	prof	prof_a2a	prof_cur_cp1_a2a
 a5	svc	svc_cp0	glm52_a5_cur_cp0
 a5	svc	svc_cp1	glm52_a5_cur_cp1
+a5	svc	svc_load_cp0	svc_a5_load_cp0
+a5	svc	svc_load_cp1	svc_a5_load_cp1
 a5	matrix	c_matrix	configs/matrix_a5_c_accept.json
 a5	matrix	b_matrix	configs/matrix_a5_b_vs_base.json
 a5	matrix	nomtp_matrix	configs/matrix_a5_c_accept_nomtp.json

@@ -1,0 +1,13 @@
+{
+  "_comment": "sv40 的在飞请求：长 prompt + 512 token，停服时它必须还在生成",
+  "name": "load_inflight",
+  "concurrency": 1,
+  "rounds": 1,
+  "requests": [
+    {
+      "id": "inflight",
+      "prompt": "long:6",
+      "max_tokens": 512
+    }
+  ]
+}

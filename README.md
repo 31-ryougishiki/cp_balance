@@ -431,6 +431,7 @@ A/B（`prof_a5_cur_cp1_a2a`，端口 8086），默认流程不跑，说明见该
 bash tests/run_tests.sh --list          # 全部测试（id/needs/tags/est/desc）
 bash tests/run_tests.sh --tag fast      # 秒级~分钟级前置检查（不起服务）
 bash tests/run_tests.sh --only smoke/s10_service_ready
+bash tests/run_tests.sh --only service                 # 服务整体：契约 + 并发突发 + 计划审计 + cp0/cp1 一致性
 bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 ```
 
@@ -439,6 +440,7 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 | `tests/smoke/` | 环境/配置解析/路径/端口/磁盘 + 两个静态门控 + 服务能否起来 + 请求是否 ZIGZAG | 秒级；两个服务级各 ~12min |
 | `tests/accuracy/` | 矩阵首 token 验收（C/B/nomtp）+ 复用已采 json 的对比 + slot<0 补丁 A/B | 每个矩阵 1 次服务起停 |
 | `tests/perf/` | 逐配置 profiling 采集 → 解析 → 单步窗口审计 → 对比/顺序报告 → 打包 | 每组一次服务起停 |
+| `tests/service/` | 服务整体：API 契约与错误路径、并发混合突发（多序列同 batch）的回复一致性、计划审计、长跑、停服/重启 | 见 tests/README.md 的表（重活默认不跑） |
 
 约定（元数据、`--from` 续跑、`CP_BALANCE_FAMILY` 切机器族、`roles.tsv` 角色表）见 `tests/README.md`；
 老的聚合入口（`round2_verify*.sh`、`perf/profile*.sh`、`run_matrix.sh`、`collect.sh`、`run_a5.sh`）已删除，统一从 tests/ 进。
@@ -451,6 +453,7 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 | `run.sh` | 启动入口：读 `configs/*.json`，交给 `serve_config.py` |
 | `serve_config.py` | 配置加载/继承/覆盖 → 环境变量 + `vllm serve` 参数（含 `--profiler-config`） |
 | `configs/` | 每条测试一份 JSON（模型/ip/port/nic/tp/开关/profiler），含矩阵配置 |
+| `configs/plans/` | 服务级流量计划（`load_mixed` / `load_soak` / `load_inflight`）：不是服务配置，`hx.py configs` 会跳过 |
 | `accuracy/run_matrix.py` | 按矩阵 JSON 串行起停服务、采集、对比、给裁定 |
 | `docs/` | 工程文档：`docs/verify_steps.md`（验证路线）、`docs/scripts_review.md`（当前状态与审查结论）、`docs/remote_run.md` 等 |
 | `questions.json` | 20 组 article + question + prompt |
@@ -472,8 +475,11 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 | `tests/lib/common.sh` | 测试共用：断言、角色表查询、服务起停（端口登记 + EXIT 收尾） |
 | `tests/lib/roles.tsv` | 角色表：family / group / role / config |
 | `tests/lib/hx.py` | 测试共用：配置/指纹/路径/端口/窗口读取 |
+| `tests/lib/loadgen.py` | 服务级流量：并发混合突发、/metrics 前后快照、check（零失败/同 prompt 一致/引擎计数）、compare（cp0 vs cp1） |
+| `tests/lib/planlog.py` | [CP_BALANCE] 日志审计：每个 batch 形状的 per-rank 计划行数、local*cp_size==pad、无 plan_error |
 | `tests/smoke/*.sh` | 冒烟：环境、配置解析、路径、端口、磁盘、静态门控、服务就绪、ZIGZAG 请求 |
 | `tests/accuracy/*.sh` | 精度：矩阵门禁（C/B/nomtp）、对比复跑、slot<0 补丁 A/B |
+| `tests/service/*.sh` | 服务整体：契约与错误路径、并发混合突发、计划审计、cp0/cp1 一致性、长跑、停服/重启 |
 | `tests/perf/*.sh` | 性能：采集、解析、窗口单步审计、对比报告、顺序归因、打包 |
 
 ## A5 一键验证（新 main 线）
@@ -486,7 +492,7 @@ bash verify.sh                    # 前置 -> 静态 -> 冒烟(拉起模型) -> 
 bash verify.sh --live-log         # 同上，另外把测试与模型服务日志实时打屏
 bash verify.sh --skip-smoke       # 不起服务，只做前置与静态检查
 bash verify.sh --family a3        # 换机器族（a5/a3）
-bash verify.sh --skip-smoke       # 跳过某个 stage；--diag-only 只对最近一轮证据出诊断
+bash verify.sh --skip-smoke       # 跳过某个 stage（--skip-service 跳过服务整体那一段）；--diag-only 只对最近一轮证据出诊断
 bash verify_a5.sh                 # 兼容老入口 = bash verify.sh --family a5
 ```
 
