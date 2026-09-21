@@ -137,33 +137,48 @@ def main() -> int:
     for line in plan:
         log(line)
 
+    failed = []
     check = matrix.get("static_check")
     if check:
-        log("step 0: static gate check")
+        # repo/base_repo may name harness.json tree roles instead of hardcoding paths
+        repo = check.get("repo") or (serve_config.tree_path(check["repo_tree"]) if check.get("repo_tree") else "")
+        base = check.get("base_repo") or (serve_config.tree_path(check["base_tree"]) if check.get("base_tree") else "")
+        log("step 0: static gate check (repo=%s base=%s)" % (repo, base))
         proc = subprocess.run(
-            [sys.executable, str(HERE / "check_b_path.py"), "--repo", str(check.get("repo")), "--base-repo", str(check.get("base_repo"))],
+            [sys.executable, str(HERE / "check_b_path.py"), "--repo", str(repo), "--base-repo", str(base)],
             capture_output=True,
             text=True,
         )
         lines = [line for line in proc.stdout.strip().splitlines() if line.strip()]
         for line in lines[-2:]:
             log("  " + line)
+        if proc.returncode != 0:
+            log("  static gate FAILED (rc=%s)" % proc.returncode)
+            failed.append("static_check")
 
-    timeout = int(matrix.get("ready_timeout", 1800))
+    timeout = int(matrix.get("ready_timeout", serve_config.limit("ready_timeout_s", 2400)))
+    log_text: dict = {}
     for entry in entries:
         name = keys[entry]
         port = int(resolved[entry]["port"])
         log_path = out / (name + ".log")
         log("run %s (port %s)" % (name, port))
-        with log_path.open("w", encoding="utf-8") as handle:
-            proc = subprocess.Popen(
-                ["bash", str(ROOT / "run.sh"), entry],
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+        if not wait_port_free(port):
+            log("  FAIL port %s is busy before launch: 先停掉残留服务（pkill -f -- \"--port %s\"）" % (port, port))
+            failed.append("run:%s" % name)
+            continue
+        handle = log_path.open("w", encoding="utf-8")
+        proc = subprocess.Popen(
+            ["bash", str(ROOT / "run.sh"), entry],
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
             ok, msg = wait_ready(port, proc, timeout)
             log("  " + msg)
+            if not ok:
+                failed.append("run:%s" % name)
             if ok:
                 collect_log = out / (name + ".collect.txt")
                 with collect_log.open("w", encoding="utf-8") as clog:
@@ -175,15 +190,48 @@ def main() -> int:
                 lines = [line for line in collect_log.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
                 suffix = "" if collect.returncode == 0 else " (collect rc=%s)" % collect.returncode
                 log("  " + (lines[-1] if lines else "collect produced no output") + suffix)
-            log("  " + (fingerprint_from_log(log_path) or "WARNING: no [cp_balance] fingerprint in " + str(log_path)))
+                if collect.returncode != 0:
+                    failed.append("collect:%s" % name)
+            fingerprint = fingerprint_from_log(log_path)
+            log("  " + (fingerprint or "WARNING: no [cp_balance] fingerprint in " + str(log_path)))
+            # 端口上必须是这条配置的服务：残留进程/串台会让整轮对比失去意义
+            if fingerprint and ("CONFIG=%s " % name) not in fingerprint:
+                log("  FAIL fingerprint is not CONFIG=%s: %s" % (name, fingerprint[:140]))
+                failed.append("fingerprint:%s" % name)
+            elif not fingerprint:
+                failed.append("fingerprint:%s" % name)
             text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+            log_text[name] = text
             for key in COUNTS:
                 log("  count %-22s %s" % (key, text.count(key)))
+        finally:
+            # 任何异常/中断都要把 8 卡服务收掉，否则后面的测试全部撞端口
             stop(proc, log)
-            if not wait_port_free(port):
-                log("  WARNING: port %s still busy after stopping the service" % port)
+            handle.close()
+        if not wait_port_free(port):
+            log("  WARNING: port %s still busy after stopping the service" % port)
 
-    failed = []
+    # require_log: 证明这批服务真的走在预期分支上，防止“两边都没进 zigzag”也 PASS
+    for item in matrix.get("require_log") or []:
+        name = str(item.get("config"))
+        text = log_text.get(name)
+        if text is None:
+            log("require %s: SKIP (config not run)" % name)
+            continue
+        any_pats = [str(pat) for pat in item.get("any") or []]
+        all_pats = [str(pat) for pat in item.get("all") or []]
+        none_pats = [str(pat) for pat in item.get("none") or []]
+        bad = []
+        if any_pats and not any(pat in text for pat in any_pats):
+            bad.append("none of %s" % any_pats)
+        bad += ["missing %s" % pat for pat in all_pats if pat not in text]
+        bad += ["unexpected %s" % pat for pat in none_pats if pat in text]
+        if bad:
+            log("require %s: FAIL %s -- %s" % (name, "; ".join(bad), item.get("why", "")))
+            failed.append("require_log:%s" % name)
+        else:
+            log("require %s: ok (%s)" % (name, item.get("why", "")))
+
     for item in compares:
         label = str(item.get("label"))
         left = out / (str(item.get("left")) + ".json")
@@ -209,7 +257,7 @@ def main() -> int:
 
     log("---- verdict ----")
     if failed:
-        log("RESULT: FAIL (gated compare failed: %s)" % ", ".join(failed))
+        log("RESULT: FAIL (failed: %s)" % ", ".join(failed))
     else:
         log("RESULT: PASS")
     log("artifacts: %s" % out)

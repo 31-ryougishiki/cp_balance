@@ -18,7 +18,7 @@ for cfg in $(hx_group prof); do
       bad=$((bad + 1))
       hx_fail "$cfg/$window: kernel_steps=$steps (window not prefill-only, discard this length)"
     fi
-  done < <($HX_PY windows "$cfg")
+  done < <($HX_PY windows "$(hx_profdir "$cfg")")
 done
 [ "$total" -gt 0 ] || hx_skip "no summary.json yet (run perf/p20_analyse first)"
 [ "$unknown" -eq "$total" ] && hx_skip "$total windows but kernel_steps is unavailable for all of them"

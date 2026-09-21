@@ -285,6 +285,10 @@ def _compare(args: argparse.Namespace) -> int:
     right = json.loads(Path(args.right).read_text(encoding="utf-8"))
     a = left.get("results") or []
     b = right.get("results") or []
+    if not a or not b:
+        # 空数据不能算「0/0 匹配」：宁可 FAIL，也不要给一个没有内容的 PASS
+        print(f"[compare] RESULT: FAIL empty data (results: {len(a)} vs {len(b)})")
+        return 1
     if len(a) != len(b):
         print(f"[compare] case count differs: {len(a)} vs {len(b)}")
         return 1
@@ -297,7 +301,8 @@ def _compare(args: argparse.Namespace) -> int:
     for item_a, item_b in zip(a, b):
         kind = str(item_a.get("kind") or "?")
         same_prompt = item_a.get("prompt_sha256") == item_b.get("prompt_sha256")
-        same_token = item_a.get("first_token") == item_b.get("first_token")
+        empty_token = item_a.get("first_token") is None or item_b.get("first_token") is None
+        same_token = not empty_token and item_a.get("first_token") == item_b.get("first_token")
         if same_token and item_a.get("first_token_id") is not None:
             same_token = item_a.get("first_token_id") == item_b.get("first_token_id")
         same_head = item_a.get("text_head") == item_b.get("text_head")

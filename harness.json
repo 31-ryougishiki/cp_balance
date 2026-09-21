@@ -1,0 +1,152 @@
+{
+  "_comment": "harness 级配置：目标代码树、机器族、超时/阈值、一键验证的步骤与判据。机器身份与模型在 configs/*.json。",
+  "serve": {
+    "vllm_bin": "vllm",
+    "pythonunbuffered": true,
+    "deterministic_env": {}
+  },
+  "limits": {
+    "ready_tries": 480,
+    "poll_seconds": 5,
+    "stop_tries": 24,
+    "stop_seconds": 5,
+    "min_free_gb": 20,
+    "ready_timeout_s": 2400,
+    "profile_settle_s": 45,
+    "profile_warmup": 2,
+    "profile_requests": 4
+  },
+  "families": {
+    "a3": {
+      "label": "A3 · 16 卡 · GLM-5.2-W4A8C8",
+      "chip": "25[0-5]",
+      "svc_role": "svc_cp1"
+    },
+    "a5": {
+      "label": "A5 · 8 卡 · GLM-5.2-w4a4c8-mxfp4",
+      "chip": "260",
+      "svc_role": "svc_cp1"
+    }
+  },
+  "trees": {
+    "cur": {
+      "path": "../vllm-ascend",
+      "remote": "https://github.com/31-ryougishiki/vllm-ascend.git",
+      "ref": "cp_balance",
+      "kind": "tip",
+      "required": true
+    },
+    "base": {
+      "path": "../vllm-ascend-base",
+      "remote": "https://github.com/31-ryougishiki/vllm-ascend.git",
+      "ref": "main",
+      "kind": "tip",
+      "required": true
+    },
+    "vllm": {
+      "path": "../vllm",
+      "remote": "https://github.com/vllm-project/vllm.git",
+      "ref": "84030bbe3d74d99bad477a3d2e37a973ccd8865c",
+      "kind": "commit",
+      "required": false
+    }
+  },
+  "model_candidates": [
+    "/mnt/share/weights/GLM-5.2*",
+    "/opt/its/model/GLM-5.2*",
+    "/mnt/weights/GLM-5.2*"
+  ],
+  "verify": {
+    "self_update": {
+      "branch": "main"
+    },
+    "stages": [
+      {
+        "id": "fast",
+        "title": "静态测试（tests/run_tests.sh --tag fast）",
+        "skip_flag": "--skip-fast",
+        "run": [
+          "bash",
+          "tests/run_tests.sh",
+          "--tag",
+          "fast",
+          "--out",
+          "{out}"
+        ]
+      },
+      {
+        "id": "smoke",
+        "title": "起服务冒烟（s10 就绪 + s11 走 ZIGZAG）",
+        "skip_flag": "--skip-smoke",
+        "run": [
+          "bash",
+          "tests/run_tests.sh",
+          "--only",
+          "smoke/s10_service_ready,smoke/s11_zigzag_request",
+          "--keep-going",
+          "--out",
+          "{out}"
+        ]
+      },
+      {
+        "id": "diagnose",
+        "title": "分支诊断",
+        "builtin": "diagnose"
+      },
+      {
+        "id": "pack",
+        "title": "打包证据",
+        "builtin": "pack"
+      }
+    ],
+    "diagnose": {
+      "sections": [
+        {
+          "title": "[CP_BALANCE][branch] 行（按次数排序）",
+          "grep": "\\[CP_BALANCE\\]\\[branch\\].*",
+          "post": "sort_count"
+        },
+        {
+          "title": "[CP_BALANCE][plan] 行（最多 5 条）",
+          "grep": "\\[CP_BALANCE\\]\\[plan\\].*",
+          "post": "head5"
+        },
+        {
+          "title": "DSA-CP / runner 相关行（去重，最多 20 条）",
+          "grep": "(DSA[- _]?CP|dsa_cp|Model Runner V[12]|data_parallel_size|sequence_parallel_moe).*",
+          "post": "sort_uniq_head20"
+        }
+      ],
+      "zigzag_evidence": [
+        "branch=ZIGZAG",
+        "[CP_BALANCE][plan]"
+      ],
+      "known": [
+        {
+          "match": "Disabling DSA-CP",
+          "message": "enable_dsa_cp 在 ascend_config 里被关掉（use_sequence_parallel_moe=False；main 上它要求 data_parallel_size>1，而部署是 dp=1）→ DSA-CP 整条路径没跑，必须先解决 A-B1，再谈 zigzag"
+        },
+        {
+          "match": "reason=dp>1",
+          "message": "zigzag 资格门拒绝 dp>1（ascend_config 又要求 dp>1 才开 DSA-CP）→ A-B1 自相矛盾"
+        },
+        {
+          "match": "reason=flag_off",
+          "message": "VLLM_ASCEND_CP_BALANCE=0：服务配置里 cp_balance 没打开（看 configs/*.json）"
+        },
+        {
+          "match": "branch=CONTINUOUS",
+          "message": "请求走了连续切片；reason= 后面是第一个拒绝门"
+        }
+      ]
+    },
+    "auto_build": {
+      "command": "pip install -e . --no-build-isolation",
+      "env_script": "/usr/local/Ascend/ascend-toolkit/set_env.sh"
+    },
+    "artifact_prefix": "verify"
+  },
+  "expect": {
+    "zigzag_plan_fields": 13
+  }
+}

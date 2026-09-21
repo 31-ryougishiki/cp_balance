@@ -11,6 +11,7 @@ cp_balance 专有代码（逐位等价仍由远端 compare_first_token.py 验证
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 SWITCH = "VLLM_ASCEND_CP_BALANCE"
@@ -54,9 +55,13 @@ def function_body(text: str, marker: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--repo", default="/home/z30055003/vllm-ascend")
+    parser.add_argument("--repo", default="", help="default: harness.json trees.cur")
     parser.add_argument("--base-repo", default="", help="optional vllm-ascend-base checkout")
     args = parser.parse_args()
+    if not args.repo:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import serve_config
+        args.repo = serve_config.tree_path("cur")
 
     pkg = Path(args.repo) / "vllm_ascend"
     if not pkg.is_dir():

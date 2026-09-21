@@ -1,7 +1,7 @@
 {
   "extends": "_common.json",
   "name": "glm52_base_cp0_repeat",
-  "repo": "../vllm-ascend-base",
   "port": 8037,
-  "cp_balance": 0
+  "cp_balance": 0,
+  "repo_tree": "base"
 }

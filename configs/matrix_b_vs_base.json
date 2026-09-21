@@ -6,8 +6,8 @@
     "glm52_base_cp0_repeat"
   ],
   "static_check": {
-    "repo": "../vllm-ascend",
-    "base_repo": "../vllm-ascend-base"
+    "base_tree": "base",
+    "repo_tree": "cur"
   },
   "compare": [
     {

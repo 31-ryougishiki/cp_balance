@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""(新 main 线) 目标代码树清单：tests/lib/trees.json 的读取器。
+"""目标代码树清单：harness.json 的 "trees" 段的读取器。
 
     trees.py list                 # role<TAB>abs_path<TAB>remote<TAB>ref<TAB>kind<TAB>required<TAB>exists
     trees.py get <role> <field>   # path|remote|ref|kind|required  （path 已绝对化）
+    trees.py model-candidates     # 本机存在的权重路径候选
 
-换分支/换远端/固定 commit 只改 tests/lib/trees.json，脚本不用动。
+换分支/换远端/固定 commit 只改 harness.json，脚本不用动。
 """
 
 from __future__ import annotations
@@ -16,11 +17,15 @@ from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
 ROOT = LIB.parents[1]          # harness 根目录
-CONFIG = LIB / "trees.json"
+CONFIG = ROOT / "harness.json"
+
+
+def harness() -> dict:
+    return json.loads(CONFIG.read_text(encoding="utf-8"))
 
 
 def load() -> dict:
-    return json.loads(CONFIG.read_text(encoding="utf-8")).get("trees", {})
+    return harness().get("trees", {})
 
 
 def resolve(role: str) -> dict:
@@ -48,8 +53,7 @@ def main() -> int:
             print("\t".join(fields))
         return 0
     if args[0] == "model-candidates":
-        cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
-        for pattern in cfg.get("model_candidates", []):
+        for pattern in harness().get("model_candidates", []):
             for hit in sorted(glob.glob(pattern)):
                 print(hit)
         return 0

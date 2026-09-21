@@ -16,7 +16,9 @@ python3 "$driver" --steps 3 --c-matrix "$c_matrix" --b-matrix "$b_matrix" \
   --optional-config "$opt" > "$HX_OUT/step3.log" 2>&1
 rc=$?
 grep -E "^\[round2\] (PASS|FAIL|SKIP|WARNING)|the TP and EP halves" "$HX_OUT/step3.log" | sed 's/^/   /'
-if grep -q "RESULT: FAIL" "$HX_OUT/step3.log"; then
+if grep -q "driver stale" "$HX_OUT/step3.log"; then
+  hx_skip "round2_verify 的补丁锚点已过期（源码改过）：这一步不可结论，先对齐锚点（见 $HX_OUT/step3.log）"
+elif grep -q "RESULT: FAIL" "$HX_OUT/step3.log"; then
   hx_fail "step 3 FAIL rc=$rc -> $HX_OUT/step3.log"
 elif grep -q "RESULT: PASS" "$HX_OUT/step3.log"; then
   hx_ok "slot<0 filter A/B PASS (patch reverted)"

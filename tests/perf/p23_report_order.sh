@@ -10,16 +10,17 @@ any=0
 for role in prof_cp1 prof_cp0; do
   cfg=$(hx_role "$role") || continue
   [ -n "$cfg" ] || continue
-  if ls -d "$cfg"/*_ascend_pt >/dev/null 2>&1; then
+  profdir=$(hx_profdir "$cfg")
+  if ls -d "$profdir"/*_ascend_pt >/dev/null 2>&1; then
     out=$HX_OUT/order_${cfg}.txt
-    python3 perf/profile_order.py "$cfg" --rank rank0 --trim > "$out" 2>&1
+    python3 perf/profile_order.py "$profdir" --rank rank0 --trim > "$out" 2>&1
     rc=$?
     if [ "$rc" -eq 0 ]; then
       hx_ok "order $cfg -> $out"
     else
       hx_fail "order $cfg rc=$rc -> $out"
     fi
-    python3 perf/profile_order.py "$cfg" --rank rank0 --devices \
+    python3 perf/profile_order.py "$profdir" --rank rank0 --devices \
       > "$HX_OUT/order_${cfg}_devices.txt" 2>&1 || true
     any=$((any + 1))
   else

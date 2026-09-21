@@ -5,5 +5,8 @@ prof_*/
 *_ascend_pt/
 *.log
 /*.json
+!/harness.json
 /*.txt
+/*.tar*
 tests/_out/
+.scratch/

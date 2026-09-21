@@ -284,7 +284,8 @@ def step3(rep: Report, cur: Path, timeout: int) -> bool:
     try:
         edits = patch_edits(cur)
     except RuntimeError as exc:
-        rep.verdict("3", "optional A/B", False, str(exc))
+        # 源码已经变了（锚点找不到）：这是 driver 过期，不是被测功能失败 -> SKIP
+        rep.skip("3", "optional A/B", "driver stale: %s（重新对齐 accuracy/round2_verify.py 的锚点后再跑）" % exc)
         return False
 
     cfg = serve_config.load_config(OPTIONAL_CONFIG)

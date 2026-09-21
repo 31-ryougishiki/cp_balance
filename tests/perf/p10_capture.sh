@@ -9,16 +9,18 @@ source "$(dirname "$0")/../lib/common.sh"
 
 role=${1:-${HX_VARIANT:-prof_cp1}}
 cfg=$(hx_resolve "$role") || { hx_fail "unknown variant: $role"; hx_end; exit 1; }
+profdir=$(hx_profdir "$cfg")
+[ -n "$profdir" ] || { hx_fail "$cfg: no profiler dir"; hx_end; exit 1; }
 
 python3 perf/profile_forward.py "$cfg" > "$HX_OUT/forward.log" 2>&1
 rc=$?
 grep -E "^\[profile\]" "$HX_OUT/forward.log" | tail -n 12 | sed 's/^/   /'
-if [ ! -f "$cfg/windows.json" ]; then
+if [ ! -f "$profdir/windows.json" ]; then
   hx_fail "$cfg: no windows.json rc=$rc -> $HX_OUT/forward.log"
   hx_end
   exit 1
 fi
-n=$($HX_PY windows "$cfg" | wc -l)
+n=$($HX_PY windows "$profdir" | wc -l)
 if [ "$n" -ge 1 ]; then
   hx_ok "$cfg: $n capture window(s)"
 else

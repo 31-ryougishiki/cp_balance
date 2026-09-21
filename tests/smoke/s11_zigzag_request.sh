@@ -17,7 +17,9 @@ python3 accuracy/check_branch.py --url "http://127.0.0.1:$port" --log "$log" \
   --min-tokens "$min_tokens" > "$HX_OUT/branch.txt" 2>&1
 rc=$?
 sed 's/^/   /' "$HX_OUT/branch.txt"
-if [ "$rc" -eq 0 ] && grep -q "RESULT: PASS" "$HX_OUT/branch.txt"; then
+if [ "$rc" -eq 77 ] || grep -q "RESULT: INCONCLUSIVE" "$HX_OUT/branch.txt"; then
+  hx_skip "长 prompt 的 token 数不到 min_tokens=$min_tokens：阶梯问题，不是功能问题（报告见 $HX_OUT/branch.txt）"
+elif [ "$rc" -eq 0 ] && grep -q "RESULT: PASS" "$HX_OUT/branch.txt"; then
   hx_ok "long prompt -> zigzag, short prompt -> continuous (min_tokens=$min_tokens)"
 else
   hx_fail "check_branch FAIL rc=$rc -> $HX_OUT/branch.txt"

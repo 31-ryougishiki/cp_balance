@@ -8,9 +8,10 @@ source "$(dirname "$0")/../lib/common.sh"
 
 dirs=""; pruned=""
 for cfg in $(hx_group prof); do
-  [ -f "$cfg/windows.json" ] || continue
-  if ls -d "$cfg"/*_ascend_pt >/dev/null 2>&1; then
-    dirs="$dirs $cfg"
+  profdir=$(hx_profdir "$cfg")
+  [ -n "$profdir" ] && [ -f "$profdir/windows.json" ] || continue
+  if ls -d "$profdir"/*_ascend_pt >/dev/null 2>&1; then
+    dirs="$dirs $profdir"
   else
     pruned="$pruned $cfg"
   fi
@@ -21,16 +22,16 @@ done
 python3 perf/profile_analyse.py $dirs > "$HX_OUT/analyse.log" 2>&1
 rc=$?
 grep -E "^\[analyse\]" "$HX_OUT/analyse.log" | tail -n 30 | sed 's/^/   /'
-for cfg in $dirs; do
-  if [ ! -f "$cfg/summary.json" ]; then
-    hx_fail "$cfg: summary.json missing"
+for profdir in $dirs; do
+  if [ ! -f "$profdir/summary.json" ]; then
+    hx_fail "$profdir: summary.json missing"
     continue
   fi
-  n=$($HX_PY usable "$cfg")
+  n=$($HX_PY usable "$profdir")
   if [ "$n" -ge 1 ]; then
-    hx_ok "$cfg/summary.json ($n usable windows)"
+    hx_ok "$profdir/summary.json ($n usable windows)"
   else
-    hx_fail "$cfg: 0 usable windows (analyse produced no usable rank output; see $HX_OUT/analyse.log)"
+    hx_fail "$profdir: 0 usable windows (analyse produced no usable rank output; see $HX_OUT/analyse.log)"
   fi
 done
 [ "$rc" -eq 0 ] || hx_fail "profile_analyse rc=$rc -> $HX_OUT/analyse.log"

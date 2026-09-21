@@ -6,7 +6,8 @@
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 
-min=${HX_MIN_FREE_GB:-20}
+min=${HX_MIN_FREE_GB:-$(hx_limit min_free_gb)}
+: "${min:=20}"
 avail_kb=$(df -Pk "$HARNESS_ROOT" | awk 'NR==2 {print $4}')
 if [ -z "$avail_kb" ]; then
   hx_skip "df gave no answer"

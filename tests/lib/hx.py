@@ -5,12 +5,18 @@
     hx.py field <cfg> <field>              生效字段值（含 CP_BALANCE_* 覆盖），JSON
     hx.py fingerprint <cfg>                等价 run.sh --dry-run 的第一行
     hx.py path <cfg> <repo|model|prelude>  路径（prelude 取 source 的文件）
+    hx.py profdir <cfg>                    profiler 输出目录（含绝对化）
     hx.py ports <cfg...>                   "cfg port"（每行一个）
     hx.py static_check <matrix>            "repo=<v> base_repo=<v>"
     hx.py compares <matrix>                "label<TAB>left<TAB>right<TAB>require_text"
     hx.py windows <dir>                    "window<TAB>kernel_steps<TAB>step_trace_rows<TAB>label"
     hx.py usable <dir>                     rank_count > 0 的窗口数（0=解析没拿到数据）
     hx.py listen <port>                    0=空闲 1=有人在听
+    hx.py limit <name>                     harness.json limits.<name>
+    hx.py harness <点分键>                 harness.json 里任意一段（字符串原样，其它 JSON）
+    hx.py families                         "family<TAB>chip<TAB>label"（每行一个）
+    hx.py stages                           "id|skip_flag|builtin|title"（每行一个，空字段保留）
+    hx.py stage-run <id>                   stage 的 run 命令（一行）
 """
 
 from __future__ import annotations
@@ -73,16 +79,30 @@ def cmd_path(name: str, key: str) -> int:
     return 0
 
 
+def cmd_profdir(name: str) -> int:
+    print(sc.profiler_dir(effective(name)))
+    return 0
+
+
 def cmd_ports(names: list) -> int:
     for name in names:
         print("%s %s" % (name, effective(name).get("port")))
     return 0
 
 
+def _check_path(check: dict, direct: str, role: str) -> str:
+    """Explicit path, or the harness.json tree role the matrix names."""
+    if check.get(direct):
+        return str(check[direct])
+    if check.get(role):
+        return sc.tree_path(check[role])
+    return ""
+
+
 def cmd_static_check(matrix: str) -> int:
     check = sc.load_config(matrix).get("static_check") or {}
-    print("repo=%s" % (check.get("repo") or ""))
-    print("base_repo=%s" % (check.get("base_repo") or ""))
+    print("repo=%s" % _check_path(check, "repo", "repo_tree"))
+    print("base_repo=%s" % _check_path(check, "base_repo", "base_tree"))
     return 0
 
 
@@ -132,6 +152,52 @@ def cmd_usable(prof_dir: str) -> int:
     return 0
 
 
+def cmd_limit(name: str) -> int:
+    limits = sc.harness().get("limits") or {}
+    if name not in limits:
+        return 1
+    print(limits[name])
+    return 0
+
+
+def cmd_harness(key: str) -> int:
+    node = sc.harness()
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return 1
+        node = node[part]
+    print(node if isinstance(node, str) else json.dumps(node, ensure_ascii=False))
+    return 0
+
+
+def cmd_families() -> int:
+    for name, info in (sc.harness().get("families") or {}).items():
+        print("%s\t%s\t%s" % (name, info.get("chip", ""), info.get("label", "")))
+    return 0
+
+
+def verify_stages() -> list:
+    return (sc.harness().get("verify") or {}).get("stages") or []
+
+
+def cmd_stages() -> int:
+    for stage in verify_stages():
+        print("%s|%s|%s|%s" % (
+            stage.get("id", ""), stage.get("skip_flag", ""), stage.get("builtin", ""), stage.get("title", "")))
+    return 0
+
+
+def cmd_stage_run(stage_id: str) -> int:
+    for stage in verify_stages():
+        if str(stage.get("id")) == stage_id:
+            command = stage.get("run") or []
+            if not command:
+                return 1
+            print(" ".join(str(item) for item in command))
+            return 0
+    return 1
+
+
 def cmd_listen(port: str) -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(2)
@@ -154,12 +220,18 @@ def main(argv: list) -> int:
         "field": lambda: cmd_field(rest[0], rest[1]),
         "fingerprint": lambda: cmd_fingerprint(rest[0]),
         "path": lambda: cmd_path(rest[0], rest[1]),
+        "profdir": lambda: cmd_profdir(rest[0]),
         "ports": lambda: cmd_ports(rest),
         "static_check": lambda: cmd_static_check(rest[0]),
         "compares": lambda: cmd_compares(rest[0]),
         "windows": lambda: cmd_windows(rest[0]),
         "usable": lambda: cmd_usable(rest[0]),
         "listen": lambda: cmd_listen(rest[0]),
+        "limit": lambda: cmd_limit(rest[0]),
+        "harness": lambda: cmd_harness(rest[0]),
+        "families": cmd_families,
+        "stages": cmd_stages,
+        "stage-run": lambda: cmd_stage_run(rest[0]),
     }
     if cmd not in table:
         print("unknown command: %s" % cmd, file=sys.stderr)

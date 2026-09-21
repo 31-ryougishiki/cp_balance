@@ -8,6 +8,12 @@ HX_ROLES=$HX_LIB/roles.tsv
 
 : "${CP_BALANCE_FAMILY:=a5}"
 : "${HARNESS_OUT:=$HARNESS_ROOT/tests/_out/$(date +%m%d_%H%M%S)}"
+# 超时/阈值来自 harness.json limits（环境变量仍可覆盖）
+hx_limit() { $HX_PY limit "$1" 2>/dev/null | tr -d '\r'; }
+HX_READY_TRIES=${HX_READY_TRIES:-$(hx_limit ready_tries)};  : "${HX_READY_TRIES:=360}"
+HX_READY_SLEEP=${HX_READY_SLEEP:-$(hx_limit poll_seconds)}; : "${HX_READY_SLEEP:=5}"
+HX_STOP_TRIES=${HX_STOP_TRIES:-$(hx_limit stop_tries)};     : "${HX_STOP_TRIES:=24}"
+HX_STOP_SLEEP=${HX_STOP_SLEEP:-$(hx_limit stop_seconds)};   : "${HX_STOP_SLEEP:=5}"
 HX_TEST_PATH=${HX_TEST_PATH:-$(basename "$0" .sh)}   # 例：accuracy/a10_matrix_gate
 HX_VARIANT=${HX_VARIANT:-${1:-}}                     # 单独跑时位置参数就是变体
 HX_TEST_ID=$HX_TEST_PATH
@@ -84,33 +90,58 @@ hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout
   local cfg=$1 log=$2 port i
   port=$(hx_cfg_field "$cfg" port)
   [ -n "$port" ] || { echo "[FAIL] $cfg has no port" >&2; return 1; }
-  hx_service_down "$port"
+  if ! hx_service_down "$port"; then
+    echo "[FAIL] port $port still answers before starting $cfg (stop it first)" >&2
+    return 1
+  fi
   HX_PORT=$port
-  (setsid bash run.sh "$cfg" > "$log" 2>&1 &)
-  # 服务起停约 10 分钟，重试上限见 HX_READY_TRIES
-  for i in $(seq 1 "${HX_READY_TRIES:-360}"); do
+  # 独立会话，停服时能连整组 mp worker 一起收：setsid 没有就退回普通后台进程
+  if command -v setsid >/dev/null 2>&1; then
+    HX_SETSID=1
+    setsid bash run.sh "$cfg" > "$log" 2>&1 &
+  else
+    HX_SETSID=0
+    nohup bash run.sh "$cfg" > "$log" 2>&1 &
+  fi
+  HX_PID=$!
+  # 服务起停约 10 分钟，重试上限见 harness.json limits.ready_tries（HX_READY_TRIES 可覆盖）
+  for i in $(seq 1 "$HX_READY_TRIES"); do
     curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null && break
-    sleep 5
+    if [ -n "$HX_PID" ] && ! kill -0 "$HX_PID" 2>/dev/null; then
+      echo "[FAIL] $cfg exited before it became ready (pid $HX_PID); tail of $log:" >&2
+      tail -n 20 "$log" >&2
+      HX_PORT=""
+      return 1
+    fi
+    sleep "$HX_READY_SLEEP"
   done
   if ! curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null; then
-    echo "[FAIL] $cfg not ready on port $port; tail of $log:" >&2
+    echo "[FAIL] $cfg not ready on port $port after $((HX_READY_TRIES * HX_READY_SLEEP))s; tail of $log:" >&2
     tail -n 20 "$log" >&2
     return 1
   fi
   echo "$port"
 }
 
-hx_service_down() {  # <port>：端口已停返回 0，120s 后仍在应答返回 1
+hx_service_down() {  # <port>：端口已停返回 0，HX_STOP_TRIES*HX_STOP_SLEEP 秒后仍在应答返回 1
   local port=$1 i
+  if [ -n "${HX_PID:-}" ]; then
+    if [ "${HX_SETSID:-0}" = "1" ]; then
+      kill -TERM -"$HX_PID" 2>/dev/null    # 整个会话/进程组：vllm 的 mp worker 也在里面
+    else
+      kill -TERM "$HX_PID" 2>/dev/null
+    fi
+    HX_PID=""
+  fi
   pkill -f -- "--port $port" >/dev/null 2>&1
-  for i in $(seq 1 24); do
+  for i in $(seq 1 "$HX_STOP_TRIES"); do
     if ! curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null; then
       HX_PORT=""
       return 0
     fi
-    sleep 5
+    sleep "$HX_STOP_SLEEP"
   done
-  hx_warn "port $port still answering 120s after stop"
+  hx_warn "port $port still answering $((HX_STOP_TRIES * HX_STOP_SLEEP))s after stop"
   HX_PORT=""
   return 1
 }

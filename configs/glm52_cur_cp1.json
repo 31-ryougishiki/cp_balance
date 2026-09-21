@@ -1,7 +1,6 @@
 {
   "extends": "_common.json",
   "name": "glm52_cur_cp1",
-  "repo": "../vllm-ascend",
   "port": 8035,
   "cp_balance": 1
 }

@@ -1,0 +1,56 @@
+{
+  "name": "_base",
+  "repo_tree": "cur",
+  "served_model_name": "glm glm-52",
+  "host": "0.0.0.0",
+  "port": 8034,
+  "cp_balance": 0,
+  "min_tokens": 2048,
+  "reduce_mode": "allreduce",
+  "debug": 1,
+  "deterministic": true,
+  "deterministic_env": {
+    "LCCL_DETERMINISTIC": "1",
+    "HCCL_DETERMINISTIC": "true",
+    "ATB_MATMUL_SHUFFLE_K_ENABLE": "0",
+    "ATB_LLM_LCOC_ENABLE": "0"
+  },
+  "additional_config": {
+    "enable_cpu_binding": "true",
+    "multistream_overlap_shared_expert": "true",
+    "enable_sparse_sfa_c8": true,
+    "enable_sparse_li_c8": true,
+    "enable_dsa_cp": true
+  },
+  "server_args": {
+    "--enable-expert-parallel": true,
+    "--distributed-executor-backend": "mp",
+    "--max_model_len": 135000,
+    "--max-num-batched-tokens": 16384,
+    "--gpu-memory-utilization": 0.9,
+    "--trust-remote-code": true,
+    "--enforce-eager": true,
+    "--quantization": "ascend",
+    "--enable-auto-tool-choice": true,
+    "--tool-call-parser": "glm47",
+    "--reasoning-parser": "glm45",
+    "--async-scheduling": true,
+    "--no-enable-prefix-caching": true
+  },
+  "env": {
+    "VLLM_USE_V2_MODEL_RUNNER": "0",
+    "HCCL_ALGO": "level0:fullmesh",
+    "HCCL_BUFFSIZE": "1200",
+    "VLLM_RPC_TIMEOUT": "3600000",
+    "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "30000",
+    "HCCL_EXEC_TIMEOUT": "204",
+    "HCCL_CONNECT_TIMEOUT": "180",
+    "VLLM_ASCEND_ENABLE_FLASHCOMM1": "1",
+    "VLLM_ASCEND_ENABLE_PREFETCH_MLP": "1",
+    "OMP_PROC_BIND": "false",
+    "OMP_NUM_THREADS": "10",
+    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+    "TASK_QUEUE_ENABLE": "1",
+    "VLLM_DISABLE_COMPILE_CACHE": "1"
+  }
+}

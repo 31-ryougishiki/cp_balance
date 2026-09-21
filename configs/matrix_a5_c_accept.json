@@ -13,5 +13,22 @@
       "gate": true
     }
   ],
-  "ready_timeout": 2400
+  "ready_timeout": 2400,
+  "require_log": [
+    {
+      "config": "glm52_a5_cur_cp1",
+      "why": "cp_balance=1 必须真的走到 zigzag 分支，否则 C 验收是空跑",
+      "any": [
+        "branch=ZIGZAG",
+        "[CP_BALANCE][plan]"
+      ]
+    },
+    {
+      "config": "glm52_a5_cur_cp0",
+      "why": "cp_balance=0 不该出现 zigzag 计划",
+      "none": [
+        "[CP_BALANCE][plan]"
+      ]
+    }
+  ]
 }

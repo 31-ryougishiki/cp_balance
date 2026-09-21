@@ -30,6 +30,22 @@ CP_BALANCE_FAMILY=a3 bash tests/run_tests.sh --tag fast
 - 产物：`tests/_out/<时间戳>/` —— 每个测试一个子目录（自己的证据）+ `status.tsv` / `results.json` / `<id>.log`。
 - 单独跑：`bash tests/perf/p10_capture.sh prof_cp1`（位置参数就是变体，证据写进 `<名字>.<变体>/`）。
 
+## 配置（harness.json）
+
+harness 级的数据只放在根目录 `harness.json`：
+
+| 段 | 内容 |
+| --- | --- |
+| `trees` / `model_candidates` | 目标代码树（path/remote/ref/kind/required）与权重候选；`tests/lib/trees.py` 读它 |
+| `families` | 机器族：chip 匹配、svc 角色、展示名（`tests/smoke/s01` 用它判断 family 与芯片是否一致） |
+| `limits` | 服务就绪/停止重试、磁盘下限、ready_timeout、profiling 默认值（`hx.py limit <名>`） |
+| `serve` | launcher 默认（vllm 可执行、PYTHONUNBUFFERED、deterministic_env 兜底） |
+| `verify` | 一键验证的 stages（id/skip_flag/run）、`{out}` 占位符、诊断判据与已知失败 |
+| `expect` | 静态门控的期望值（如 ZigzagPlan 字段数） |
+
+每条服务/矩阵配置仍然是 `configs/*.json`（模型/端口/开关/profiler），`repo` 不写路径而是
+`repo_tree: cur|base`，由 `harness.json trees` 解析。
+
 ## 机器族与角色表
 
 测试不写死 IP/网卡/路径，配置名由 `tests/lib/roles.tsv` 一行一个角色给出：
@@ -45,8 +61,8 @@ CP_BALANCE_FAMILY=a3 bash tests/run_tests.sh --tag fast
 | --- | --- |
 | `CP_BALANCE_FAMILY` | `a5` / `a3`，选角色表（非法值 runner 直接退出 2） |
 | `HARNESS_OUT` | 产物目录（runner 默认 `tests/_out/<月日>_<时分秒>`） |
-| `HX_READY_TRIES` | 服务就绪轮询次数，每次 5s（默认 360，即 30 分钟上限） |
-| `HX_MIN_FREE_GB` | `smoke/s05_disk` 的磁盘下限（默认 20） |
+| `HX_READY_TRIES` / `HX_READY_SLEEP` | 服务就绪轮询（默认取 `harness.json limits.ready_tries` / `poll_seconds`） |
+| `HX_MIN_FREE_GB` | `smoke/s05_disk` 的磁盘下限（默认取 `limits.min_free_gb`） |
 | `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME` / `CP_BALANCE_DEVICES` | 机器身份，harness 自己读（测试不重复解析） |
 | `CP_BALANCE_REPO` / `CP_BALANCE_BASE_REPO` | 静态门控使用的代码树 |
 

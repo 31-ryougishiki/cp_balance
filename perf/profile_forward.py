@@ -249,8 +249,11 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     log("[profile] service log -> %s" % log_path)
 
     prepare_dir(prof_dir)
+    # 上一轮的 windows.json 必须先删：采集失败时不能让旧产物冒充本轮结果
+    (Path(prof_dir) / "windows.json").unlink(missing_ok=True)
     before = snapshot(prof_dir)
-    wait_port_free(port)
+    if not wait_port_free(port):
+        raise SystemExit("port %s is busy before launch (stale service?)" % port)
 
     entries = []
     with open(log_path, "w", encoding="utf-8") as handle:
@@ -375,14 +378,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("configs", nargs="+", help="config name under configs/ (profiler enabled)")
     parser.add_argument("--kind", default="long", help="questions.json kind used to build prompts")
-    parser.add_argument("--warmup", type=int, default=2, help="unprofiled requests (single-window mode only)")
-    parser.add_argument("--requests", type=int, default=4, help="profiled requests (single-window mode only)")
+    parser.add_argument("--warmup", type=int, default=serve_config.limit("profile_warmup", 2),
+                        help="unprofiled requests (single-window mode only)")
+    parser.add_argument("--requests", type=int, default=serve_config.limit("profile_requests", 4),
+                        help="profiled requests (single-window mode only)")
     parser.add_argument("--max-completion-tokens", type=int, default=1)
     parser.add_argument("--endpoint", default="/v1/completions")
     parser.add_argument("--model", default="", help="served model name (default: questions.json hint)")
     parser.add_argument("--timeout", type=float, default=3600.0)
-    parser.add_argument("--ready-timeout", type=int, default=1800)
-    parser.add_argument("--settle", type=int, default=45, help="seconds to let the trace flush after /stop_profile")
+    parser.add_argument("--ready-timeout", type=int, default=serve_config.limit("ready_timeout_s", 2400))
+    parser.add_argument("--settle", type=int, default=serve_config.limit("profile_settle_s", 45),
+                        help="seconds to let the trace flush after /stop_profile")
     parser.add_argument("--no-clean-pass", dest="clean_pass", action="store_false", help="skip the unprofiled second pass")
     args = parser.parse_args()
 
@@ -402,7 +408,8 @@ def main() -> int:
         )
     if failed:
         log("[profile] FAILED configs: %s" % ", ".join(failed))
-    return 0
+    # 非 0 退出：只要有配置失败，p10_capture 就必须 FAIL（否则会拿旧产物当成功）
+    return 1 if failed or not results else 0
 
 
 if __name__ == "__main__":

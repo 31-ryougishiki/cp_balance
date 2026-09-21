@@ -481,14 +481,18 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 cd /home/z30055003/cp_balance
 export CP_BALANCE_LOCAL_IP=$(ip -o -4 addr show | awk '$2!="lo"{print $4}' | cut -d/ -f1 | head -1)
 export CP_BALANCE_NIC_NAME=$(ip -o -4 addr show | awk '$2!="lo"{print $2}' | head -1)
-bash verify_a5.sh                 # 前置 -> --tag fast -> 起服务冒烟 -> 分支诊断 -> 打包
-bash verify_a5.sh --skip-smoke    # 不起服务；--diag-only 只抓最近一轮证据
+bash verify.sh                    # 前置 -> harness.json verify.stages -> 分支诊断 -> 打包
+bash verify.sh --family a3        # 换机器族（a5/a3）
+bash verify.sh --skip-smoke       # 跳过某个 stage；--diag-only 只对最近一轮证据出诊断
+bash verify_a5.sh                 # 兼容老入口 = bash verify.sh --family a5
 ```
 
 只需 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME`（可选 `CP_BALANCE_DEVICES` / `CP_BALANCE_REPO` /
-`CP_BALANCE_BASE_REPO` / `HX_READY_TRIES`）；family 脚本自己设成 a5，`VLLM_USE_V2_MODEL_RUNNER=0` 在
-`configs/_common_a5.json` 里，`VLLM_ASCEND_CP_BALANCE*` 由配置的 cp_balance/min_tokens/reduce_mode/debug 字段导出。
-判据：静态/冒烟 FAIL，或诊断里没有 `branch=ZIGZAG`（尤其 `reason=dp>1`）都算不通过，证据包 `verify_a5_*.tgz`。
+`CP_BALANCE_BASE_REPO` / `HX_READY_TRIES`）；`VLLM_USE_V2_MODEL_RUNNER=0` 在 `configs/_base.json` 里，
+`VLLM_ASCEND_CP_BALANCE*` 由配置的 cp_balance/min_tokens/reduce_mode/debug 字段导出。
+判据来自 `harness.json` 的 `verify.diagnose`：长 prompt 要出现 zigzag 证据（`branch=ZIGZAG` 或
+`[CP_BALANCE][plan]`），否则按已知失败表给出原因（例如 `Disabling DSA-CP`、`reason=dp>1`）；
+不通过时的证据包是 `verify_<family>_*.tar.gz`。
 
 容器里 `local_ip` / `nic_name` 可以写成 `auto`（A5 公共配置已默认如此），解析顺序：环境变量
 `CP_BALANCE_LOCAL_IP`/`CP_BALANCE_NIC_NAME` > `configs/*.json` 里的具体值 > 自动识别。
@@ -517,7 +521,7 @@ harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-a
 换机器/换目录后只需要 CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME（容器里可留空自动识别）；
 树不在兄弟位置时用 CP_BALANCE_REPO / CP_BALANCE_BASE_REPO 覆盖，或改配置里的相对路径。
 
-## 目标代码树与自动对齐（tests/lib/trees.json）
+## 目标代码树与自动对齐（harness.json）
 
 版本信息只在这一个文件里维护：
 
@@ -525,7 +529,8 @@ harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-a
     base  ../vllm-ascend-base   origin=<fork>  ref=main        kind=tip      required=true
     vllm  ../vllm               origin=vllm-project/vllm   ref=84030bbe...  kind=commit  required=false
 
-python3 tests/lib/trees.py list / get <角色> <字段> 读它；verify_a5.sh 前置检查会遍历所有角色：
+树清单在根目录 `harness.json`（同一个文件还放 families / limits / verify 步骤与判据），
+`python3 tests/lib/trees.py list / get <角色> <字段>` 读它；`verify.sh` 前置检查会遍历所有角色：
 
 - 目录不在 → git clone <remote> <path>（required=false 的角色只提示不失败）；
 - origin 不一致 → git remote set-url；

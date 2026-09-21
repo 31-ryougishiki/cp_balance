@@ -470,8 +470,13 @@ def infer_repo(prof_dir: Path, explicit: str) -> Path | None:
         configured = (data.get("profiler") or {}).get("dir")
         if configured and Path(str(configured)).resolve() == prof_dir:
             return Path(data["repo"]) if data.get("repo") else None
-    fallback = Path("/opt/its/z30055003/vllm-ascend")
-    return fallback if fallback.is_dir() else None
+    # 没在 configs 里找到：退回 harness.json trees.cur（不再写死某台机器的路径）
+    try:
+        import serve_config
+
+        return Path(serve_config.tree_path("cur"))
+    except Exception:  # noqa: BLE001 - mapping is optional
+        return None
 
 
 def main() -> int:

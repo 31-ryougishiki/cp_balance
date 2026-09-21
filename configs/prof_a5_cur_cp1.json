@@ -1,10 +1,7 @@
 {
   "extends": "_profile_a5_common.json",
   "name": "prof_a5_cur_cp1",
-  "repo": "../vllm-ascend",
   "port": 8085,
   "cp_balance": 1,
-  "profiler": {
-    "dir": "prof_a5_cur_cp1"
-  }
+  "profiler": {}
 }

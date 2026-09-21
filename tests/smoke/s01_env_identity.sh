@@ -41,19 +41,25 @@ if [ -n "${CP_BALANCE_LOCAL_IP:-}" ]; then
   fi
 fi
 
+for cmd in curl pkill python3 setsid; do
+  command -v "$cmd" >/dev/null 2>&1 && hx_ok "$cmd found" || hx_fail "$cmd missing (服务起停要用)"
+done
+
 soc=$(python3 -c "import torch_npu; print(torch_npu.npu.get_soc_version())" 2>/dev/null)
 if [ -z "$soc" ]; then
   hx_warn "torch_npu not importable in this shell (config prelude sets it up for the service)"
 else
-  case "$soc" in
-    260)     dev=A5 ;;
-    25[0-5]) dev=A3 ;;
-    *)       dev=unknown ;;
-  esac
-  hx_ok "soc_version=$soc ($dev)"
-  case "$CP_BALANCE_FAMILY:$dev" in
-    a5:A5|a3:A3) hx_ok "family=$CP_BALANCE_FAMILY matches chip" ;;
-    *)           hx_fail "family=$CP_BALANCE_FAMILY does not match chip=$dev" ;;
+  # family -> chip 的对应关系在 harness.json families 里，不在测试里写死
+  match=""
+  while IFS=$'\t' read -r fam chip _label; do
+    [ -n "$chip" ] || continue
+    if printf '%s' "$soc" | grep -Eq "$chip"; then match=$fam; break; fi
+  done < <($HX_PY families)
+  hx_ok "soc_version=$soc (harness.json: ${match:-unknown})"
+  case "$match" in
+    "$CP_BALANCE_FAMILY") hx_ok "family=$CP_BALANCE_FAMILY matches chip" ;;
+    "")                   hx_warn "soc=$soc 不匹配 harness.json families 里任何 chip，无法校验 family" ;;
+    *)                    hx_fail "family=$CP_BALANCE_FAMILY does not match chip=$soc (harness.json 认为这是 $match)" ;;
   esac
   npu=$(python3 -c "import torch_npu; print(torch_npu.npu.device_count())" 2>/dev/null)
   if [ -n "$npu" ]; then

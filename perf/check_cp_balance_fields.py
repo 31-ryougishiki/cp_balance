@@ -15,6 +15,7 @@ zigzag 布局在三个手写容器之间传递，字段名写错 = 首个 prefil
 from __future__ import annotations
 
 import argparse
+import sys
 import ast
 from pathlib import Path
 
@@ -123,8 +124,12 @@ def check_construction(cls_name: str, cls_fields: dict, calls: list, where: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--repo", default="/home/z30055003/vllm-ascend")
+    parser.add_argument("--repo", default="", help="default: harness.json trees.cur")
     args = parser.parse_args()
+    if not args.repo:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import serve_config
+        args.repo = serve_config.tree_path("cur")
     repo = Path(args.repo)
 
     trees = {}

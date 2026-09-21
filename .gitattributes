@@ -3,6 +3,7 @@
 *.sh  text eol=lf
 *.py  text eol=lf
 *.tsv text eol=lf
+*.json text eol=lf
 # 文本文件同样按 LF 检出，免得同一个目录里 LF/CRLF 混着
 *.md           text eol=lf
 .gitignore     text eol=lf
