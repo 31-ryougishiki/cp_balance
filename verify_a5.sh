@@ -6,6 +6,10 @@
 #   bash verify_a5.sh --skip-smoke    # 不起服务
 #   bash verify_a5.sh --diag-only     # 只从最近一次 tests/_out 抓分支日志
 #
+# 代码版本：verify_a5.sh 会比对 tests/lib/targets.tsv（cur=cp_balance / base=main），
+# 分支或 commit 不对时自动 checkout + reset 到 origin/<分支>（脏树会拒绝并列出改动，
+# 想只检查不切换就 CP_BALANCE_AUTO_CHECKOUT=0）
+#
 # 环境变量：CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME 未设置时自动识别
 #           （默认路由接口优先，容器内没有 ip/ifconfig 也能用；多网卡建议显式指定）
 # 可选：CP_BALANCE_DEVICES / CP_BALANCE_REPO / CP_BALANCE_BASE_REPO / HX_READY_TRIES
@@ -83,6 +87,26 @@ note "对照树=$BASE_REPO"
 hx_need_dir "被测代码树" "$CUR_REPO"
 hx_need_dir "对照代码树" "$BASE_REPO"
 hx_need_dir "权重" "$MODEL"
+# 代码版本对齐：不在目标分支/目标 commit 上就自动切过去（tests/lib/targets.tsv 定义目标分支）
+. "$HERE/tests/lib/sync_tree.sh"
+if [ "%%{CP_BALANCE_AUTO_CHECKOUT:-1}" = "1" ]; then
+  for pair in "cur=$CUR_REPO" "base=$BASE_REPO"; do
+    role=%%{pair%%=*}
+    dir=%%{pair#*=}
+    [ -n "$dir" ] || continue
+    branch=$(hx_tree_branch "$role" || true)
+    if [ -z "$branch" ]; then
+      note "$role：targets.tsv 没有该角色，跳过版本对齐"
+      continue
+    fi
+    if ! hx_sync_tree "$dir" "$branch" origin; then
+      bad "代码版本对齐失败：$role ($dir)，期望 $branch"
+    fi
+  done
+else
+  note "CP_BALANCE_AUTO_CHECKOUT=0：只显示当前版本，不自动切换"
+fi
+
 for r in "$CUR_REPO" "$BASE_REPO"; do
   [ -n "$r" ] && [ -d "$r/.git" ] && note "$r -> $(git -C "$r" log -1 --oneline 2>/dev/null)"
 done
