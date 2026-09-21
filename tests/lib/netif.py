@@ -218,6 +218,10 @@ def best() -> dict | None:
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(newline="")  # 行式输出：不要把 LF 变成 CRLF
+    except Exception:
+        pass
     if "--ifaces" in sys.argv:
         for name in _iface_names():
             print(name)

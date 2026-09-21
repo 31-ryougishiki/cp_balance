@@ -36,12 +36,15 @@ harness 级的数据只放在根目录 `harness.json`：
 
 | 段 | 内容 |
 | --- | --- |
-| `trees` / `model_candidates` | 目标代码树（path/remote/ref/kind/required）与权重候选；`tests/lib/trees.py` 读它 |
+| `trees` / `model_candidates` | 目标代码树（path/remote/ref/kind/required/patches）与权重候选；`tests/lib/trees.py` 读它 |
 | `families` | 机器族：chip 匹配、svc 角色、展示名（`tests/smoke/s01` 用它判断 family 与芯片是否一致） |
 | `limits` | 服务就绪/停止重试、磁盘下限、ready_timeout、profiling 默认值（`hx.py limit <名>`） |
 | `serve` | launcher 默认（vllm 可执行、PYTHONUNBUFFERED、deterministic_env 兜底） |
 | `verify` | 一键验证的 stages（id/skip_flag/run）、`{out}` 占位符、诊断判据与已知失败 |
 | `expect` | 静态门控的期望值（如 ZigzagPlan 字段数） |
+
+`trees.<角色>.patches` 是树对齐后要打的补丁（`patches/*.patch`，相对 harness 根目录，幂等）：
+参照树要跟被测树跑在同一代 DSA-CP 语义上时用它，例如 `patches/dsa_cp_dp1.patch`（dp=1 允许开 DSA-CP）。
 
 每条服务/矩阵配置仍然是 `configs/*.json`（模型/端口/开关/profiler），`repo` 不写路径而是
 `repo_tree: cur|base`，由 `harness.json trees` 解析。

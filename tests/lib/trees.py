@@ -3,6 +3,7 @@
 
     trees.py list                 # role<TAB>abs_path<TAB>remote<TAB>ref<TAB>kind<TAB>required<TAB>exists
     trees.py get <role> <field>   # path|remote|ref|kind|required  （path 已绝对化）
+    trees.py patches <role>       # 树对齐后要打的补丁（绝对路径，每行一个）
     trees.py model-candidates     # 本机存在的权重路径候选
 
 换分支/换远端/固定 commit 只改 harness.json，脚本不用动。
@@ -40,10 +41,15 @@ def resolve(role: str) -> dict:
     entry.setdefault("ref", "main")
     entry.setdefault("kind", "tip")
     entry.setdefault("required", True)
+    entry.setdefault("patches", [])
     return entry
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(newline="")  # 行式输出：不要把 LF 变成 CRLF
+    except Exception:
+        pass
     args = sys.argv[1:]
     if not args or args[0] == "list":
         for role in load():
@@ -56,6 +62,18 @@ def main() -> int:
         for pattern in harness().get("model_candidates", []):
             for hit in sorted(glob.glob(pattern)):
                 print(hit)
+        return 0
+    if args[0] == "patches" and len(args) >= 2:
+        for item in resolve(args[1]).get("patches") or []:
+            patch = Path(str(item))
+            if not patch.is_absolute():
+                patch = ROOT / patch
+            patch = patch.resolve()
+            # harness 里的补丁给相对路径（bash 的 [ -f ] 是内建测试，不认 Windows 盘符）
+            try:
+                print(patch.relative_to(ROOT).as_posix())
+            except ValueError:
+                print(patch.as_posix())
         return 0
     if args[0] == "get" and len(args) >= 3:
         entry = resolve(args[1])

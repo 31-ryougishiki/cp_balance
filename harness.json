@@ -1,5 +1,5 @@
 {
-  "_comment": "harness 级配置：目标代码树、机器族、超时/阈值、一键验证的步骤与判据。机器身份与模型在 configs/*.json。",
+  "_comment": "harness 级配置：目标代码树、机器族、超时/阈值、一键验证的步骤与判据。机器身份与模型在 configs/*.json。；trees.<角色>.patches 是树对齐后要打的补丁（相对 harness 目录，用来让参照树也能跑在 dp=1 的 DSA-CP 上）",
   "serve": {
     "vllm_bin": "vllm",
     "pythonunbuffered": true,
@@ -41,7 +41,10 @@
       "remote": "https://github.com/31-ryougishiki/vllm-ascend.git",
       "ref": "main",
       "kind": "tip",
-      "required": true
+      "required": true,
+      "patches": [
+        "patches/dsa_cp_dp1.patch"
+      ]
     },
     "vllm": {
       "path": "../vllm",
