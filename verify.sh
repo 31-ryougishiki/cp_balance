@@ -157,17 +157,34 @@ if [ -n "$BASE_REPO" ] && [ -f "$BASE_REPO/vllm_ascend/envs.py" ] \
    && grep -q VLLM_ASCEND_CP_BALANCE "$BASE_REPO/vllm_ascend/envs.py"; then
   hx_fail "对照树里也有 CP_BALANCE：对照树应是原版 main"
 fi
-# 构建产物：_build_info.py 由 setup.py 生成，缺了服务会在 import 阶段就死
+# 构建产物：_build_info.py 是 setup.py 在安装/构建时生成的（只有一行 __device_type__，只跟芯片型号有关），
+# 它不进版本库，所以新 clone / 换机器都没有它；而 vllm_ascend 在 import 阶段就要读它 → 服务直接 ImportError。
+# 注意：只改 py 不需要重编译；这里缺的是生成物，只要让这个文件存在即可。
 if [ -n "$CUR_REPO" ] && [ -f "$CUR_REPO/vllm_ascend/__init__.py" ] \
    && [ ! -f "$CUR_REPO/vllm_ascend/_build_info.py" ]; then
-  hx_fail "被测树缺构建产物 vllm_ascend/_build_info.py（服务会 ImportError: cannot import name '_build_info'）"
-  if [ "${CP_BALANCE_AUTO_BUILD:-0}" = "1" ]; then
+  hx_warn "被测树缺生成物 vllm_ascend/_build_info.py（只有一行 __device_type__，import 阶段就要用）"
+  auto=${CP_BALANCE_AUTO_BUILD:-0}
+  if [ "$auto" = "copy" ]; then
+    src=""
+    while IFS=$'\t' read -r role tpath _r _f _k _q _e; do
+      [ -n "$role" ] || continue
+      [ "$role" = "cur" ] && continue
+      if [ -f "$tpath/vllm_ascend/_build_info.py" ]; then src="$tpath"; break; fi
+    done < <(hx_tree_roles)
+    if [ -n "$src" ]; then
+      cp "$src/vllm_ascend/_build_info.py" "$CUR_REPO/vllm_ascend/_build_info.py" \
+        && hx_ok "已从同芯片的兄弟树拷 _build_info.py：$src" \
+        || hx_fail "拷贝 _build_info.py 失败"
+    else
+      hx_fail "CP_BALANCE_AUTO_BUILD=copy 但没找到带 _build_info.py 的兄弟树"
+    fi
+  elif [ "$auto" = "1" ]; then
     build_cmd=$($HX_PY harness verify.auto_build.command)
     build_env=$($HX_PY harness verify.auto_build.env_script)
     [ -n "$build_cmd" ] || build_cmd="pip install -e . --no-build-isolation"
     prelude=$($HX_PY path "$SVC_CFG" prelude)
     [ -n "$prelude" ] && build_env=$prelude
-    hx_note "CP_BALANCE_AUTO_BUILD=1：在 $CUR_REPO 里执行 $build_cmd（几分钟）"
+    hx_note "CP_BALANCE_AUTO_BUILD=1：在 $CUR_REPO 里执行 $build_cmd（首次 clone 才需要，几分钟；顺带生成 C 扩展）"
     (
       cd "$CUR_REPO" || exit 1
       [ -n "$build_env" ] && [ -f "$build_env" ] && . "$build_env"
@@ -177,8 +194,15 @@ if [ -n "$CUR_REPO" ] && [ -f "$CUR_REPO/vllm_ascend/__init__.py" ] \
       || hx_fail "自动构建失败，看 ${PREFIX}_build_$STAMP.log"
     [ -f "$CUR_REPO/vllm_ascend/_build_info.py" ] && hx_ok "构建产物已生成"
   else
-    hx_note "修法：cd <被测树> && source <CANN>/set_env.sh && pip install -e . --no-build-isolation"
-    hx_note "或者设 CP_BALANCE_AUTO_BUILD=1 让本脚本自动构建"
+    hx_note "只改过 py 的话不需要重编译，只要补这个文件：三选一"
+    hx_note "  1) 从同芯片的兄弟树拷（最快，内容只有一行）：cp <另一棵树>/vllm_ascend/_build_info.py $CUR_REPO/vllm_ascend/"
+    hx_note "  2) 在本树跑一次安装（首次 clone 推荐，顺带生成 vllm_ascend_C*.so）：cd $CUR_REPO && source <CANN>/set_env.sh && pip install -e . --no-build-isolation"
+    hx_note "  3) 让脚本自动做：CP_BALANCE_AUTO_BUILD=copy（拷兄弟树）或 =1（跑 pip install）"
+  fi
+  if [ -f "$CUR_REPO/vllm_ascend/_build_info.py" ]; then
+    hx_ok "生成物已就位（只改过 py 的话不需要重编译）"
+  else
+    hx_fail "生成物仍缺失：服务会在 import 阶段 ImportError，按上面的修法补上再跑"
   fi
 fi
 if [ -n "$CUR_REPO" ] && [ -d "$CUR_REPO/vllm_ascend" ]; then

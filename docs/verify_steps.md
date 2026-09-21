@@ -21,6 +21,10 @@ bash verify.sh --family a5
 
 诊断是 `VERDICT=KNOWN Disabling DSA-CP` → 说明树没带 dp=1 的门修或补丁没打上，先修树，别往下走。
 
+若前置报缺 `vllm_ascend/_build_info.py`：那是 `setup.py` 生成的、只跟芯片型号有关的一行文件（不是编译产物），
+**只改过 py 不需要重编译**。`CP_BALANCE_AUTO_BUILD=copy` 可从同芯片的兄弟树拷过来，或者手工 `cp`；
+只有新 clone 才需要在该树跑一次 `pip install -e . --no-build-isolation`（顺带生成 C 扩展）。
+
 ## 1. 阶段 1：先钉死"DSA-CP 在 dp=1 成立"（cp_balance=0，2 次起停，约 25 分钟）
 
 ```bash

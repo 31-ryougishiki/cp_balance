@@ -510,11 +510,18 @@ dp=1 的现状（两个树都带本地修复）：`enable_dsa_cp` 只判模型�
 过滤 lo/docker*/veth*/br-*/169.254.*；`python3 tests/lib/netif.py` 可列出全部候选。
 设备同理：`devices` 留空或写 `auto` 时取容器里的 `ASCEND_RT_VISIBLE_DEVICES`。
 
-换代码树 / 新 clone 之后必须在树里构建一次，否则服务起不来：
-`_build_info.py` 是 `setup.py` 生成的（内容只有 `__device_type__`），源码树里没有，harness 用
-`PYTHONPATH` 直接指树，缺了就在 import 阶段报 `cannot import name '_build_info'`。
-`verify.sh` 的前置检查会直接指出来；修法：`cd <树> && source <CANN>/set_env.sh && pip install -e . --no-build-isolation`
-（同机对照树里有该文件时可临时 `cp <对照树>/vllm_ascend/_build_info.py <树>/vllm_ascend/`）。
+换代码树 / 新 clone 之后要"生成"一次，但**只改 py 不需要重编译**：
+`vllm_ascend/_build_info.py` 不是编译产物，而是 `setup.py` 在安装/构建时写出的一个只有一行的文件
+（`__device_type__ = '<芯片>'`，内容只由 `SOC_VERSION` 决定）；它不进版本库，所以新 clone 没有它，
+而 `vllm_ascend/device/device_config.py` 在 import 阶段就会 `from vllm_ascend import _build_info` →
+缺了就直接报 `cannot import name '_build_info'`（跟改没改算子无关）。三种补法（`verify.sh` 前置会提示）：
+
+1. 同芯片的兄弟树里有就拷（最快，一秒）：`cp <另一棵树>/vllm_ascend/_build_info.py <树>/vllm_ascend/`；
+2. 在该树跑一次安装（首次 clone 推荐，顺带生成 C 扩展 `vllm_ascend_C*.so`）：
+   `cd <树> && source <CANN>/set_env.sh && pip install -e . --no-build-isolation`；
+3. 让脚本自动做：`CP_BALANCE_AUTO_BUILD=copy`（拷兄弟树）或 `=1`（跑 pip install）。
+
+只有改了 `csrc/`（C++/AscendC 算子）或换了 SOC/CANN 才需要重新编译；已经构建过的树改 py 直接生效（harness 用 PYTHONPATH 指树）。
 
 
 ## 目录布局
