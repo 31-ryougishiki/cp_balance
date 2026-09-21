@@ -32,8 +32,9 @@ cp_balance/
 启动脚本只负责读 JSON。所有产物（服务日志、`*.json`、`matrix_*/`）默认写在**当前目录**，不再用 `/tmp`：
 
 ```bash
-bash run.sh configs/glm52_cur_cp0.json      # 也可以只写名字
-bash run.sh glm52_cur_cp0 --dry-run --print-env   # 只打印命令与环境
+bash run.sh                                 # 不带参数 = configs/default.json = A5 的 cp1 服务（mxfp4 / TP8 / port 8035 / MTP）
+bash run.sh configs/glm52_a5_cur_cp0.json    # 也可以只写名字
+bash run.sh glm52_a5_cur_cp0 --dry-run --print-env   # 只打印命令与环境
 ```
 
 一条配置覆盖所有会变的参数：
@@ -322,7 +323,7 @@ WARNING），然后只看绝对量——attention 时间、集合通信时间、
 重复一轮来量，不能靠除掉一个所谓不受影响的算子——zigzag 会改变各 rank 持有的 token 集合，MoE 的
 路由分布跟着变，dispatch 时间本来就可能变。
 
-判读顺序与性能假设见工程机文档目录的 `docs/perf_plan.md`（未随本仓库提交）。
+判读顺序与性能假设见 `docs/perf_plan.md`。
 
 采集、解析、对比、归因、打包由 `bash tests/run_tests.sh --only perf` 串起来，最后一步自动调用 `perf/collect.py` 把清点/clean_s/compare/order/指纹打成一个 `collect_<时间戳>/*.tgz`（不含原始 trace），不用再手工 tar。
 
@@ -397,11 +398,11 @@ cd /opt/its/z30055003/cp_balance && git pull         # harness（本轮 driver +
 与 A5 的差别：TP=16（cp_size=16，zigzag 每序列切 32 块）、模型是 W4A8C8（不是 mxfp4）、
 **没有 MTP**、profiling 沿用确定性环境变量；配置是 `configs/_common.json` +
 `configs/prof_*.json`，端口 8034~8037（prof_cur_cp0 与 repeat 同为 8034，串行不冲突）。
-判据、失败排查与回传清单见工程机文档目录的 `docs/cp_balance_remote_checklist.md`（未随本仓库提交）。
+判据、失败排查与回传清单见 `docs/cp_balance_remote_checklist.md`（历史清单，现状看 `docs/verify_steps.md`）。
 
 ## A5 环境（8 卡，GLM-5.2-w4a4c8-mxfp4）
 
-A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传清单见工程机文档目录的 `docs/a5_test_plan.md`（未随本仓库提交）。
+A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传清单见 `docs/a5_test_plan.md` 与 `docs/verify_steps.md`。
 一条命令：
 
 ```bash
@@ -416,7 +417,7 @@ A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.13
 `export CP_BALANCE_LOCAL_IP=141.61.133.104 CP_BALANCE_NIC_NAME=eth2`；命令行 `--set` 优先于环境变量。
 
 目标机 `.104` 的完整命令清单（机器族判定、冒烟、精度/性能入口、打包回传）见工程机文档目录的
-`docs/a5_104_runbook.md`（未随本仓库提交）；`reduce_mode=allreduce` / `alltoall` 的对照是可选
+`docs/a5_104_runbook.md`；`reduce_mode=allreduce` / `alltoall` 的对照是可选
 A/B（`prof_a5_cur_cp1_a2a`，端口 8086），默认流程不跑，说明见该文档 §4。
 
 两处需要按现场确认：base 代码树路径（默认 `/home/z30055003/vllm-ascend-base`）与
@@ -441,7 +442,7 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 
 约定（元数据、`--from` 续跑、`CP_BALANCE_FAMILY` 切机器族、`roles.tsv` 角色表）见 `tests/README.md`；
 老的聚合入口（`round2_verify*.sh`、`perf/profile*.sh`、`run_matrix.sh`、`collect.sh`、`run_a5.sh`）已删除，统一从 tests/ 进。
-远端的完整跑法与回传清单见工程机文档目录的 `docs/remote_run.md`（未随本仓库提交）。
+远端的完整跑法与回传清单见 `docs/remote_run.md`，接下来的验证顺序见 `docs/verify_steps.md`。
 
 ## 文件
 
@@ -451,6 +452,7 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 | `serve_config.py` | 配置加载/继承/覆盖 → 环境变量 + `vllm serve` 参数（含 `--profiler-config`） |
 | `configs/` | 每条测试一份 JSON（模型/ip/port/nic/tp/开关/profiler），含矩阵配置 |
 | `accuracy/run_matrix.py` | 按矩阵 JSON 串行起停服务、采集、对比、给裁定 |
+| `docs/` | 工程文档：`docs/verify_steps.md`（验证路线）、`docs/scripts_review.md`（当前状态与审查结论）、`docs/remote_run.md` 等 |
 | `questions.json` | 20 组 article + question + prompt |
 | `accuracy/compare_first_token.py` | collect / compare 首词元 |
 | `accuracy/check_branch.py` | 证明请求走的是 ZIGZAG 还是 CONTINUOUS 分支 |
