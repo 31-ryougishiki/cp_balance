@@ -482,7 +482,9 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 cd /home/z30055003/cp_balance
 export CP_BALANCE_LOCAL_IP=$(ip -o -4 addr show | awk '$2!="lo"{print $4}' | cut -d/ -f1 | head -1)
 export CP_BALANCE_NIC_NAME=$(ip -o -4 addr show | awk '$2!="lo"{print $2}' | head -1)
-bash verify.sh                    # 前置 -> harness.json verify.stages -> 分支诊断 -> 打包
+bash verify.sh                    # 前置 -> 静态 -> 冒烟(拉起模型) -> 分支诊断 -> 打包
+bash verify.sh --live-log         # 同上，另外把测试与模型服务日志实时打屏
+bash verify.sh --skip-smoke       # 不起服务，只做前置与静态检查
 bash verify.sh --family a3        # 换机器族（a5/a3）
 bash verify.sh --skip-smoke       # 跳过某个 stage；--diag-only 只对最近一轮证据出诊断
 bash verify_a5.sh                 # 兼容老入口 = bash verify.sh --family a5

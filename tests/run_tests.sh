@@ -20,13 +20,14 @@ tests/run_tests.sh [options]
   --family a5|a3   机器族（等价 CP_BALANCE_FAMILY，默认 a5）
   --out DIR        产物目录（默认 tests/_out/<时间戳>）
   --keep-going     有 FAIL 也继续
+  --live-log       测试与模型服务日志实时打屏（同时写入 $OUT）
   --strict         SKIP 也算失败
 USAGE
 }
 
 FAMILY=${CP_BALANCE_FAMILY:-a5}
 ONLY=""; SKIP=""; TAGS=""; FROM=""; OUT=""
-LIST=0; DRY=0; KEEP=0; STRICT=0
+LIST=0; DRY=0; KEEP=0; STRICT=0; LIVE=${HX_LIVE_LOG:-0}
 while [ $# -gt 0 ]; do
   opt=$1
   case "$opt" in
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
       esac
       shift 2 ;;
     --keep-going) KEEP=1; shift ;;
+    --live-log)   LIVE=1; shift ;;
     --strict)     STRICT=1; shift ;;
     --list)       LIST=1; shift ;;
     --dry-run)    DRY=1; shift ;;
@@ -55,6 +57,7 @@ case "$FAMILY" in
   *) echo "run_tests: --family must be a5 or a3 (got '$FAMILY')" >&2; exit 2 ;;
 esac
 export CP_BALANCE_FAMILY=$FAMILY
+export HX_STREAM_SERVICE_LOG=$LIVE
 : "${OUT:=$ROOT/tests/_out/$(date +%m%d_%H%M%S)}"
 export HARNESS_OUT=$OUT
 mkdir -p "$OUT"
@@ -121,7 +124,7 @@ for f in "$HERE"/smoke/*.sh "$HERE"/accuracy/*.sh "$HERE"/perf/*.sh; do
 done
 
 [ "$n" -gt 0 ] || { echo "run_tests: no tests found under $HERE" >&2; exit 2; }
-echo "[run_tests] family=$FAMILY tests=$n out=$OUT"
+echo "[run_tests] family=$FAMILY tests=$n out=$OUT live_log=$LIVE"
 for v in CP_BALANCE_LOCAL_IP CP_BALANCE_NIC_NAME CP_BALANCE_DEVICES CP_BALANCE_REPO CP_BALANCE_BASE_REPO; do
   [ -n "${!v:-}" ] && echo "[run_tests] env $v=${!v}"
 done
@@ -163,10 +166,15 @@ while [ "$i" -lt "$n" ]; do
   log=$OUT/${id//\//_}.log
   printf '\n== %s ==\n' "$id"
   t0=$(date +%s)
-  HX_TEST_PATH=${id%%#*} HX_VARIANT=$var bash "$file" > "$log" 2>&1
-  rc=$?
+  if [ "$LIVE" = "1" ]; then
+    HX_TEST_PATH=${id%%#*} HX_VARIANT=$var bash "$file" 2>&1 | tee "$log"
+    rc=${PIPESTATUS[0]}
+  else
+    HX_TEST_PATH=${id%%#*} HX_VARIANT=$var bash "$file" > "$log" 2>&1
+    rc=$?
+  fi
   t1=$(date +%s); secs=$((t1 - t0))
-  sed 's/^/   /' "$log"
+  [ "$LIVE" = "1" ] || sed 's/^/   /' "$log"
   case "$rc" in
     0)  st=PASS; pass=$((pass + 1)) ;;
     77) st=SKIP; skipped=$((skipped + 1)) ;;

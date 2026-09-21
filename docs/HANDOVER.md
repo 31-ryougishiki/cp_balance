@@ -24,7 +24,9 @@
 cd <harness>            # 例如 /home/z30055003/cp_balance
 git pull                # 只拉 harness；两棵代码树由 verify.sh 自动 clone/对齐/打补丁
 export CP_BALANCE_LOCAL_IP=<本机 IP> CP_BALANCE_NIC_NAME=<网卡>   # 不设也行（配置默认 auto）
-bash verify.sh                  # = --family a5：前置 -> 静态 -> 冒烟 -> 诊断 -> 打包
+bash verify.sh                  # = --family a5：前置 -> 静态 -> 冒烟(会拉起模型) -> 诊断 -> 打包
+bash verify.sh --live-log       # 同上，并把测试与模型服务日志实时打屏
+bash verify.sh --skip-smoke     # 不起服务（只做前置/静态）
 bash tests/run_tests.sh --list  # 看全部测试；--only/--tag/--from/--skip 逐层跑
 ```
 

@@ -96,12 +96,21 @@ hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout
   fi
   HX_PORT=$port
   # 独立会话，停服时能连整组 mp worker 一起收：setsid 没有就退回普通后台进程
+  # HX_STREAM_SERVICE_LOG=1：服务日志同时 tee 到测试 stdout（run_tests.sh --live-log 会打开），文件照旧用于解析
   if command -v setsid >/dev/null 2>&1; then
     HX_SETSID=1
-    setsid bash run.sh "$cfg" > "$log" 2>&1 &
+    if [ "${HX_STREAM_SERVICE_LOG:-0}" = "1" ]; then
+      setsid bash run.sh "$cfg" > >(tee "$log") 2>&1 &
+    else
+      setsid bash run.sh "$cfg" > "$log" 2>&1 &
+    fi
   else
     HX_SETSID=0
-    nohup bash run.sh "$cfg" > "$log" 2>&1 &
+    if [ "${HX_STREAM_SERVICE_LOG:-0}" = "1" ]; then
+      nohup bash run.sh "$cfg" > >(tee "$log") 2>&1 &
+    else
+      nohup bash run.sh "$cfg" > "$log" 2>&1 &
+    fi
   fi
   HX_PID=$!
   # 服务起停约 10 分钟，重试上限见 harness.json limits.ready_tries（HX_READY_TRIES 可覆盖）

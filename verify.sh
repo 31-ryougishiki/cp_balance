@@ -6,6 +6,7 @@
 #   bash verify.sh --skip-fast        # 跳过任一 stage（名字见 harness.json verify.stages[].skip_flag）
 #   bash verify.sh --skip-smoke
 #   bash verify.sh --diag-only        # 只对最近一轮 tests/_out 出诊断报告
+#   bash verify.sh --live-log         # 测试与模型服务日志实时打屏（默认只写文件）
 #
 # 判据、步骤、日志格式全部来自 harness.json（verify.stages / verify.diagnose），
 # 机器身份来自环境变量（CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME / CP_BALANCE_DEVICES），
@@ -28,6 +29,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --family)    FAMILY=${2:-}; shift 2 ;;
     --diag-only) DIAG_ONLY=1; shift ;;
+    --live-log)  HX_LIVE_LOG=1; shift ;;
     -h|--help)   sed -n '2,13p' "$0"; exit 0 ;;
     --skip-*)
       case " $KNOWN_SKIP_FLAGS " in
@@ -45,6 +47,7 @@ case " $FAMILIES " in
   *) echo "verify: --family 只能是 $FAMILIES（当前 '$FAMILY'）" >&2; exit 2 ;;
 esac
 export CP_BALANCE_FAMILY=$FAMILY
+export HX_LIVE_LOG=${HX_LIVE_LOG:-0}
 
 STAMP=$(date +%m%d_%H%M%S)_$$
 PREFIX=$($HX_PY harness verify.artifact_prefix)
@@ -62,6 +65,7 @@ if [ "$DIAG_ONLY" = 1 ]; then
 fi
 
 # ---------------- 0. 前置检查 ----------------
+[ "${HX_LIVE_LOG:-0}" = "1" ] && printf "[note] live-log：测试与模型服务日志实时打屏（同时写入 tests/_out）\n"
 step "0. 前置检查"
 missing=()
 [ -n "${CP_BALANCE_LOCAL_IP:-}" ] || missing+=(CP_BALANCE_LOCAL_IP)

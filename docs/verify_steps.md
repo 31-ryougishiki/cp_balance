@@ -9,12 +9,16 @@
 cd <harness>            # /home/z30055003/cp_balance 一类
 git pull                # harness、被测树(vllm-ascend@cp_balance)都要先 push 过
 export CP_BALANCE_LOCAL_IP=<本机 IP> CP_BALANCE_NIC_NAME=<网卡>   # 不设则自动识别（配置默认 auto）
-bash verify.sh --family a5
+bash verify.sh --family a5            # 默认：会拉起模型（smoke 阶段两次起停）
+bash verify.sh --family a5 --live-log # 同上，另外把测试与模型服务日志实时打屏
+# 只想看日志、不起服务：--skip-smoke（跳过冒烟）或 --diag-only（只对已有证据出诊断）
 ```
 
 期望：
 
 - 前置阶段把参照树对齐到 fork 的 `base-dp1` 分支（= main + dp=1 门修），日志里有 `[sync] vllm-ascend-base 已在 base-dp1@...`；
+- `--live-log` 打开后，smoke 阶段的服务日志会实时打屏（同时照旧写入 `tests/_out/<stamp>_<family>/smoke/.../<配置名>.log`，诊断仍读文件）；
+  默认不开（只写文件），服务没起来时测试会打日志尾部。想看单个服务日志也可以另开一个终端：`tail -f tests/_out/<stamp>_a5/smoke/*/<配置名>.log`；
 - 服务日志出现 `DSA-CP is enabled without sequence-parallel MoE (data_parallel_size=1)`，**不是** `Disabling DSA-CP`；
 - 诊断 `[diagnose] VERDICT=OK ...`（命中 `branch=ZIGZAG` 或 `[CP_BALANCE][plan]`）；
 - 产物：`verify_a5_<stamp>.tar.gz`（报告 + 这一轮 `tests/_out/<stamp>_a5/`）。

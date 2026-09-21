@@ -21,6 +21,7 @@ bash tests/run_tests.sh --only smoke/s10_service_ready
 bash tests/run_tests.sh --only perf               # 目录名也行：perf = perf/ 下全部
 bash tests/run_tests.sh --from accuracy           # 从 accuracy 开始（失败后用 --from <id> 续跑）
 bash tests/run_tests.sh --keep-going              # 默认第一个 FAIL 就停
+bash tests/run_tests.sh --only smoke/s10_service_ready --live-log   # 测试与模型服务日志实时打屏（env：HX_LIVE_LOG=1）
 CP_BALANCE_FAMILY=a3 bash tests/run_tests.sh --tag fast
 ```
 
