@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 代码树自动对齐（供 verify_a5.sh / 其它入口 source）
+# 代码树自动对齐（供 verify.sh / 其它入口 source）
 #
-#   hx_tree_field <角色> <字段>            # tests/lib/trees.json（trees.py get）
+#   hx_tree_field <角色> <字段>            # harness.json trees（trees.py get）
 #   hx_ensure_tree <角色> [<路径覆盖>]     # 缺了就 clone，版本不对就切到目标（分支 tip 或固定 commit）
 #   hx_sync_tree <路径> <分支> [<远端>]    # 只在指定路径上做分支对齐（向后兼容的小工具）
 #
-# 目标版本全部来自 tests/lib/trees.json；CP_BALANCE_AUTO_CHECKOUT=0 时只报告不切换。
+# 目标版本全部来自 harness.json；CP_BALANCE_AUTO_CHECKOUT=0 时只报告不切换。
 # 返回 0 = 已就绪（或已修好/可跳过）；1 = 失败。
 
 hx_tree_field() {
@@ -106,7 +106,7 @@ hx_sync_tree() {   # <路径> <分支> [<远端>]
 hx_ensure_tree() {   # <角色> [<路径覆盖>]
   local role=$1 override=$2
   local path remote ref kind required
-  path=$(hx_tree_field "$role" path) || { echo "[sync] trees.json 里没有角色 $role" >&2; return 1; }
+  path=$(hx_tree_field "$role" path) || { echo "[sync] harness.json trees 里没有角色 $role" >&2; return 1; }
   [ -n "$override" ] && path=$override
   remote=$(hx_tree_field "$role" remote)
   ref=$(hx_tree_field "$role" ref)
@@ -119,7 +119,7 @@ hx_ensure_tree() {   # <角色> [<路径覆盖>]
       return 0
     fi
     if [ -z "$remote" ]; then
-      echo "[sync] $role 树不存在（$path）且 trees.json 没给 remote，无法自动拉取" >&2
+      echo "[sync] $role 树不存在（$path）且 harness.json 没给 remote，无法自动拉取" >&2
       return 1
     fi
     if [ "${CP_BALANCE_AUTO_CHECKOUT:-1}" != "1" ]; then
