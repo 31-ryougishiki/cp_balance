@@ -7,7 +7,7 @@
 
 | 目录 | 语义 | 起服务 |
 | --- | --- | --- |
-| `tests/smoke/` | 前置检查：环境/配置解析/路径/端口/磁盘 + 静态门控 + 服务能否起来 + 请求是否走 ZIGZAG + 服务日志链路（s08，假服务） | s10/s11 各一次 |
+| `tests/smoke/` | 前置检查：环境/配置解析/路径/端口/磁盘 + 静态门控 + 服务能否起来 + 请求是否走 ZIGZAG | s10/s11 各一次 |
 | `tests/accuracy/` | 精度验收：矩阵首 token 比对（C/B/nomtp）、复用已采 json 的对比、slot<0 补丁 A/B | 每个矩阵一次 |
 | `tests/perf/` | 性能：逐配置采集 → 解析 → 单步窗口审计 → 对比/顺序报告 → 打包 | 采集起一次 |
 | `tests/service/` | 服务整体：API 契约与错误路径、并发混合突发的回复一致性、本轮 batch 的 zigzag 计划在所有 rank 上是否一致、长跑稳定性、停服/重启 | sv10/sv20/sv30/sv40 |
@@ -23,8 +23,6 @@ bash tests/run_tests.sh --only perf               # 目录名也行：perf = per
 bash tests/run_tests.sh --from accuracy           # 从 accuracy 开始（失败后用 --from <id> 续跑）
 bash tests/run_tests.sh --keep-going              # 默认第一个 FAIL 就停
 bash tests/run_tests.sh --only smoke/s10_service_ready --live-log   # 测试与模型服务日志实时打屏（env：HX_LIVE_LOG=1）
-bash tests/run_tests.sh --only smoke/s08_service_log_wiring --live-log  # 日志链路自检（假服务，20 秒，不占 NPU）
-bash tests/run_tests.sh --only smoke            # 冒烟：环境/静态/服务就绪/ZIGZAG/日志链路
 CP_BALANCE_FAMILY=a3 bash tests/run_tests.sh --tag fast
 bash tests/run_tests.sh --only service        # 服务整体：契约 + 并发突发 + 计划审计 + cp0/cp1 一致性
 ```
@@ -105,7 +103,6 @@ hx_end                              # 0=PASS；hx_skip -> 77=SKIP；其它=FAIL
   `HX_STREAM_SERVICE_LOG=1`（`--live-log`）时另起 `tail -F` 把同一份日志跟到 stderr 上屏；
   服务的 pid/跟随进程的 pid 写在 `$HARNESS_OUT/.svc/port-<port>.state` 里（`hx_service_up` 在 `$()` 子 shell 里跑，
   普通变量带不出来）；`common.sh` 装了 EXIT trap，中途失败/被打断也会把本轮服务收干净；
-  自检可以用 `HX_SVC_CMD` 换成假服务（见 `smoke/s08_service_log_wiring.sh`）；
 - 脚本与配置文件一律 LF：CRLF 的脚本在 Linux 上会在 `set -o pipefail` / `source ...` 那两行直接失败；
 - 产物落在仓库根目录的测试（`prof_*`、`matrix_*`）在测试之间是链式的，不是相互独立的：
   `p10_capture → p20_analyse → p21/p22/p23/p24` 依次吃上一步的产物，`a20_compare_collected`
@@ -116,7 +113,6 @@ hx_end                              # 0=PASS；hx_skip -> 77=SKIP；其它=FAIL
 | 验收 | 跑法 |
 | --- | --- |
 | 静态门控（字段 / B 路径） | `--only smoke/s06_static_fields,smoke/s07_static_b_path` |
-| 服务日志链路（落盘 / 上屏 / 端口捕获 / 停干净） | `--only smoke/s08_service_log_wiring --live-log`（假服务，20 秒） |
 | C 验收 + B 等价性 + 噪声地板 | `--only accuracy/a10_matrix_gate`（A3 的 `#nomtp_matrix` 会 SKIP） |
 | 复用已采 json 复跑对比 | `--only accuracy/a20_compare_collected` |
 | 可选 A/B（slot<0 过滤） | `--only accuracy/a30_slot_filter_ab` |

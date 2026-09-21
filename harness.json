@@ -8,7 +8,6 @@
   "limits": {
     "ready_tries": 480,
     "poll_seconds": 5,
-    "ready_note_seconds": 60,
     "stop_tries": 24,
     "stop_seconds": 5,
     "min_free_gb": 20,

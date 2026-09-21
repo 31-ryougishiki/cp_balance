@@ -13,15 +13,13 @@ bash verify.sh --family a5            # 默认：会拉起模型（smoke 阶段�
 bash verify.sh --family a5 --live-log # 同上，另外把测试与模型服务日志实时打屏
 # 只想看日志、不起服务：--skip-smoke（跳过冒烟）或 --diag-only（只对已有证据出诊断）
 # 服务整体那一段单独跳过：--skip-service
-# 日志链路自检（假服务，20 秒，不占 NPU）：bash tests/run_tests.sh --only smoke/s08_service_log_wiring --live-log
 ```
 
 期望：
 
 - 前置阶段把参照树对齐到 fork 的 `base-dp1` 分支（= main + dp=1 门修），日志里有 `[sync] vllm-ascend-base 已在 base-dp1@...`；
 - `--live-log` 打开后，smoke 阶段的服务日志会实时打屏（同一份内容照旧写文件）；默认不上屏、只写文件，
-  等就绪期间每 `limits.ready_note_seconds`（默认 60s）打一行进度（含日志尾行）；起不来时带日志路径、大小和尾部，
-  日志是空的话会直接说"日志是空的"（不是被 harness 丢掉）；
+  服务起不来时会带日志路径、大小和尾部，日志是空的话会直接说"日志是空的"（不是被 harness 丢掉）；
 - 日志路径：每个 stage 打一行 `[note] stage <id> 日志：...`（run_tests 的测试输出）；服务日志在
   `tests/_out/<stamp>_<family>/<测试 id>/<配置名>.log`（例：`.../smoke/s10_service_ready.svc_cp1/glm52_a5_cur_cp1.log`），
   也可以另开终端 `tail -f`，或直接 `bash verify.sh --live-log` 让它上屏；

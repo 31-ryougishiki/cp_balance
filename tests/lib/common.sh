@@ -18,8 +18,6 @@ HX_READY_TRIES=${HX_READY_TRIES:-$(hx_limit ready_tries)};  : "${HX_READY_TRIES:
 HX_READY_SLEEP=${HX_READY_SLEEP:-$(hx_limit poll_seconds)}; : "${HX_READY_SLEEP:=5}"
 HX_STOP_TRIES=${HX_STOP_TRIES:-$(hx_limit stop_tries)};     : "${HX_STOP_TRIES:=24}"
 HX_STOP_SLEEP=${HX_STOP_SLEEP:-$(hx_limit stop_seconds)};   : "${HX_STOP_SLEEP:=5}"
-# 等服务就绪时每隔多少秒报一次进度（尾行 + 日志路径），见 tests/lib/service.sh
-HX_READY_NOTE_S=${HX_READY_NOTE_S:-$(hx_limit ready_note_seconds)}; : "${HX_READY_NOTE_S:=60}"
 HX_TEST_PATH=${HX_TEST_PATH:-$(basename "$0" .sh)}   # 例：accuracy/a10_matrix_gate
 HX_VARIANT=${HX_VARIANT:-${1:-}}                     # 单独跑时位置参数就是变体
 HX_TEST_ID=$HX_TEST_PATH

@@ -9,8 +9,6 @@
 #   * 服务的 pid / 跟随进程的 pid 写在 $HX_SVC_STATE_DIR/port-<port>.state：hx_service_up 一定
 #     在 $( ) 子 shell 里跑，普通变量带不出来，停服务只能靠这个文件（旧实现因此只能 pkill）。
 HX_SVC_STATE_DIR=${HX_SVC_STATE_DIR:-${HARNESS_OUT:-/tmp}/.svc}
-# 起服务的命令；自检（tests/smoke/s08_service_log_wiring.sh）把它换成假服务，参数仍是 <config>
-HX_SVC_CMD=${HX_SVC_CMD:-bash run.sh}
 # 包装层：服务进程把自己的 pid 追加进 state 文件再 exec（exec 后 pid 不变）。
 # 必须由服务自己报 pid：`setsid` 在调用方已是进程组组长时会 fork 后退出，`$!` 就成了死 pid，
 # 用它判断"进程是否已退出"会把还在加载的服务误判成崩溃，也停不掉它。
@@ -35,9 +33,6 @@ hx_svc_follow_stop() {  # <pid>：收掉日志跟随进程，否则 run_tests --
 
 hx_svc_start() {  # <port> <config> <log>：起服务（stdout/stderr -> $log），可选的跟随进程
   local port=$1 cfg=$2 log=$3 state pid use_setsid=0 tail_pid=""
-  local -a cmd
-  read -r -a cmd <<< "$HX_SVC_CMD"
-  [ ${#cmd[@]} -gt 0 ] || { printf '[FAIL] HX_SVC_CMD 是空的\n' >&2; return 1; }
   mkdir -p "$(dirname "$log")" "$HX_SVC_STATE_DIR"
   state=$(hx_svc_state_file "$port")
   command -v setsid >/dev/null 2>&1 && use_setsid=1
@@ -46,9 +41,9 @@ hx_svc_start() {  # <port> <config> <log>：起服务（stdout/stderr -> $log）
   : > "$log"
   # 独立会话，停服时能连整组 mp worker 一起收：setsid 没有就退回普通后台进程
   if [ "$use_setsid" = "1" ]; then
-    setsid bash -c "$HX_SVC_RECORD_PID" _ "$state" "${cmd[@]}" "$cfg" > "$log" 2>&1 &
+    setsid bash -c "$HX_SVC_RECORD_PID" _ "$state" bash run.sh "$cfg" > "$log" 2>&1 &
   else
-    nohup bash -c "$HX_SVC_RECORD_PID" _ "$state" "${cmd[@]}" "$cfg" > "$log" 2>&1 &
+    nohup bash -c "$HX_SVC_RECORD_PID" _ "$state" bash run.sh "$cfg" > "$log" 2>&1 &
   fi
   pid=$!
   printf 'launch_pid=%s\n' "$pid" >> "$state"
@@ -79,26 +74,16 @@ hx_svc_report_failure() {  # <config> <log> <原因>：失败现场必须带日�
   fi
 }
 
-hx_svc_wait_ready() {  # <config> <log> <port>：等到 /v1/models 就绪；过程中定期报进度
-  local cfg=$1 log=$2 port=$3 i tries=${HX_READY_TRIES:-360} sleep_s=${HX_READY_SLEEP:-5}
-  local note_s=${HX_READY_NOTE_S:-60} every last pid
+hx_svc_wait_ready() {  # <config> <log> <port>：等到 /v1/models 就绪（上限见 limits.ready_tries）
+  local cfg=$1 log=$2 port=$3 i tries=${HX_READY_TRIES:-360} sleep_s=${HX_READY_SLEEP:-5} pid
   local state; state=$(hx_svc_state_file "$port")
   [ "$sleep_s" -gt 0 ] || sleep_s=1
-  every=$(( note_s / sleep_s )); [ "$every" -lt 1 ] && every=1
   pid=$(hx_svc_state_get "$state" pid || true)
   for i in $(seq 1 "$tries"); do
     curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null && return 0
     if [ -n "${pid:-}" ] && ! kill -0 "$pid" 2>/dev/null; then
       hx_svc_report_failure "$cfg" "$log" "启动进程已退出（pid $pid）"
       return 1
-    fi
-    if [ $(( i % every )) -eq 0 ]; then
-      last=$(tail -n 1 "$log" 2>/dev/null | cut -c1-160)
-      if [ -n "$last" ]; then
-        hx_svc_note "$cfg 等服务就绪 $(( i * sleep_s ))s，日志尾行：$last"
-      else
-        hx_svc_note "$cfg 等服务就绪 $(( i * sleep_s ))s，服务日志还是空的（$log）"
-      fi
     fi
     sleep "$sleep_s"
   done
