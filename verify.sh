@@ -105,17 +105,6 @@ hx_note "family=$FAMILY ($($HX_PY harness "families.$FAMILY.label")) 配置=$SVC
 hx_note "IP=$CP_BALANCE_LOCAL_IP NIC=$CP_BALANCE_NIC_NAME DEVICES=${CP_BALANCE_DEVICES:-<配置默认>}"
 hx_note "被测树=$CUR_REPO"
 hx_note "对照树=$BASE_REPO"
-hx_need_dir "被测代码树" "$CUR_REPO"
-hx_need_dir "对照代码树" "$BASE_REPO"
-hx_need_dir "权重" "$MODEL"
-if [ -n "$MODEL" ] && [ ! -d "$MODEL" ]; then
-  cand=$(python3 "$HERE/tests/lib/trees.py" model-candidates 2>/dev/null | head -5)
-  if [ -n "$cand" ]; then
-    hx_note "本机找到这些权重候选（可用 CP_BALANCE_MODEL=<路径> 覆盖）："
-    printf '%s\n' "$cand" | sed 's/^/       /'
-  fi
-fi
-
 # 代码版本对齐：树不在就 clone，版本不对就切（tests/lib/sync_tree.sh，清单在 harness.json trees）
 . "$HERE/tests/lib/sync_tree.sh"
 roles_seen=0
@@ -143,6 +132,17 @@ if [ "${CP_BALANCE_AUTO_CHECKOUT:-1}" = "1" ]; then
   fi
 else
   hx_note "CP_BALANCE_AUTO_CHECKOUT=0：只显示当前版本，不自动拉取/切换"
+fi
+
+hx_need_dir "被测代码树" "$CUR_REPO"
+hx_need_dir "对照代码树" "$BASE_REPO"
+hx_need_dir "权重" "$MODEL"
+if [ -n "$MODEL" ] && [ ! -d "$MODEL" ]; then
+  cand=$(python3 "$HERE/tests/lib/trees.py" model-candidates 2>/dev/null | head -5)
+  if [ -n "$cand" ]; then
+    hx_note "本机找到这些权重候选（可用 CP_BALANCE_MODEL=<路径> 覆盖）："
+    printf '%s\n' "$cand" | sed 's/^/       /'
+  fi
 fi
 
 for r in "$CUR_REPO" "$BASE_REPO"; do
