@@ -170,10 +170,9 @@ token 数与日志证据：
 - 短 prompt（<2048 token）→ 只有 `branch=CONTINUOUS`，`reason=actual<min(2048)`；
 - 长 prompt（≥2048 token）→ 至少一行 `branch=ZIGZAG`，`reason=-`。
 
-`[CP_BALANCE][branch]` 字段：
-`rank / branch / reason / state / pad / actual / reqs / real / min_qlen / local / min_tokens`。
-`reason` 是第一个拒绝 zigzag 的门（`flag_off`、`actual<min(N)`、`query_len<32`、
-`state=DecodeOnly`、`dp>1`、`plan_error:...` 等）。
+`[CP_BALANCE][branch]` 字段：`rank / branch / reason`（走 zigzag 时 `reason=-`；资格门拒绝时 reason 是第一个拒绝门：
+`flag_off`、`actual<min(N)`、`query_len<32`、`state=DecodeOnly`、`dp>1`、`draft`、`plan_error:...` 等）。
+pad / actual / local / idx 这些量在 `[CP_BALANCE][plan]` 行里（DEBUG 打开时每个合格 batch 一行）。
 
 注意：DEBUG 打开后 decode 步也会打 `branch=CONTINUOUS reason=state=DecodeOnly`，
 属正常现象；日志没有实时落盘时（重定向未带 `PYTHONUNBUFFERED=1`）脚本会报
@@ -458,7 +457,7 @@ bash tests/run_tests.sh                 # 按 smoke -> accuracy -> perf 全跑
 | `accuracy/check_b_path.py` | 静态证明 cp_balance 只作用于 zigzag 路径（B == 原版 DSA-CP） |
 | `configs/_common_a5.json` / `_common_a5_mtp.json` | A5 公共参数（后者额外打开 MTP） |
 | `configs/matrix_a5_*.json` | A5 的两套矩阵（C 验收、B 等价性） |
-| `accuracy/round2_verify.py` | 本轮验收 driver（步骤 0~3）：现在只由 `tests/accuracy/a30_slot_filter_ab` 驱动（step 3 的 slot<0 补丁 A/B，补丁自动还原） |
+| `accuracy/round2_verify.py` | 可选 A/B driver（步骤 0~3），只由 `tests/accuracy/a30_slot_filter_ab` 驱动。被测树改过之后它的补丁锚点失效，a30 直接 SKIP（已定案不修），不影响 a10/a20 |
 | `perf/profile_forward.py` | 每个配置一段 profiling 采集（起停服务 + start/stop_profile） |
 | `perf/profile_analyse.py` | 远端跑 `torch_npu analyse` 并把 CSV 压成 `summary.json`（`export/` 只留三个小 CSV，`communication*.json` 不回传） |
 | `perf/profile_compare.py` | 对比两份 `summary.json`：rank 间失衡、HCCL、算子差 |
@@ -493,6 +492,14 @@ bash verify_a5.sh                 # 兼容老入口 = bash verify.sh --family a5
 判据来自 `harness.json` 的 `verify.diagnose`：长 prompt 要出现 zigzag 证据（`branch=ZIGZAG` 或
 `[CP_BALANCE][plan]`），否则按已知失败表给出原因（例如 `Disabling DSA-CP`、`reason=dp>1`）；
 不通过时的证据包是 `verify_<family>_*.tar.gz`。
+
+dp=1 的现状（两个树都带本地修复）：`enable_dsa_cp` 只判模型有没有 indexer，所以 tp16/dp1 也能开 DSA-CP，
+日志是 `DSA-CP is enabled without sequence-parallel MoE`，不再是 `Disabling DSA-CP`。
+连续切片（cp_balance=0）逻辑自洽，可以直接验收；zigzag（cp_balance=1）还差层内 MoE 的布局处理
+（原因与三条出路见 `docs/scripts_review.md` §8），建议先跑 cp0 把「DSA-CP 在 dp=1 成立」钉死，再决定 zigzag 怎么修。
+
+参照树（base）默认会打 `patches/dsa_cp_dp1.patch`（同一行门修），这样 B 等价性比较的是同一条 DSA-CP 路径；
+不想动参照树就把 `harness.json` 里 `trees.base.patches` 删掉（此时 B 对比只能当作「开了 DSA-CP vs 没开」看）。
 
 容器里 `local_ip` / `nic_name` 可以写成 `auto`（A5 公共配置已默认如此），解析顺序：环境变量
 `CP_BALANCE_LOCAL_IP`/`CP_BALANCE_NIC_NAME` > `configs/*.json` 里的具体值 > 自动识别。
@@ -535,9 +542,11 @@ harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-a
 - 目录不在 → git clone <remote> <path>（required=false 的角色只提示不失败）；
 - origin 不一致 → git remote set-url；
 - kind=tip → fetch 后 checkout <分支> + reset --hard origin/<分支>；kind=commit → checkout --detach <commit>；
-- 脏树不自动切换（列出改动），切换前打印将被丢弃的提交（reflog 可找回）；
+- 只有「真的要切换」时才拦脏树：已经对齐的树带着补丁也能继续用；切换前打印将被丢弃的提交（reflog 可找回）；
+- `patches`（可选）：对齐后按清单打补丁（幂等，已打上就跳过），用来让参照树和被测树跑在同一代语义上；
+  当前只有 `trees.base.patches = ["patches/dsa_cp_dp1.patch"]`（dp=1 允许开 DSA-CP）；
 - CP_BALANCE_AUTO_CHECKOUT=0 只报告不切换。
 
 其它自动化：harness 自身干净且落后 origin/main 时 `git pull --ff-only`；权重路径不存在时列出本机候选
 （CP_BALANCE_MODEL=<路径> 可覆盖）；树缺 vllm_ascend/_build_info.py 时提示重新构建，设
-CP_BALANCE_AUTO_BUILD=1 则直接在该树里跑 pip install -e . --no-build-isolation（日志 verify_a5_build_*.log）。
+CP_BALANCE_AUTO_BUILD=1 则直接在该树里跑 pip install -e . --no-build-isolation（日志 verify_build_*.log，随 family 命名）。
