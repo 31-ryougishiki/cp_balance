@@ -34,6 +34,7 @@ DETERMINISTIC_ENV = {
 # shared checkout).  Set them in the shell before launching the harness; the
 # command line --set still wins over them.
 ENV_OVERRIDES = (
+    ("model", "CP_BALANCE_MODEL"),
     ("local_ip", "CP_BALANCE_LOCAL_IP"),
     ("nic_name", "CP_BALANCE_NIC_NAME"),
     ("devices", "CP_BALANCE_DEVICES"),

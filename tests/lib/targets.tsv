@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# 目标代码版本：角色<TAB>分支（路径来自 configs 的 repo / static_check.base_repo）
-#
-# cur  = 被测树（cp_balance 分支）
-# base = 对照树（vllm-ascend 的 main，无 cp_balance）
-cur	cp_balance
-base	main

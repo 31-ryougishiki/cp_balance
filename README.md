@@ -517,14 +517,22 @@ harness 与两棵代码树是兄弟目录，配置里用相对路径（../vllm-a
 换机器/换目录后只需要 CP_BALANCE_LOCAL_IP / CP_BALANCE_NIC_NAME（容器里可留空自动识别）；
 树不在兄弟位置时用 CP_BALANCE_REPO / CP_BALANCE_BASE_REPO 覆盖，或改配置里的相对路径。
 
-## 代码版本自动对齐
+## 目标代码树与自动对齐（tests/lib/trees.json）
 
-tests/lib/targets.tsv 定义目标分支（cur = cp_balance，base = main）；tests/lib/sync_tree.sh
-提供 hx_sync_tree <路径> <分支> [远端]：先 git fetch，再比对 HEAD/分支，不一致就
-checkout <分支> + reset --hard <远端>/<分支>。
+版本信息只在这一个文件里维护：
 
-- verify_a5.sh 前置检查里对两棵树各跑一次，失败记 FAIL；
-- 脏树（有未提交改动）拒绝自动切换并列改动；切换前打印将被丢弃的本地提交（reflog 可找回）；
-- CP_BALANCE_AUTO_CHECKOUT=0 只报告不切换；
-- 单独用：bash -c ". tests/lib/sync_tree.sh; hx_sync_tree ../vllm-ascend cp_balance origin"；
-- 切完版本后树里若没有构建产物（vllm_ascend/_build_info.py），verify_a5.sh 会接着提示重新构建。
+    cur   ../vllm-ascend        origin=<fork>  ref=cp_balance  kind=tip      required=true
+    base  ../vllm-ascend-base   origin=<fork>  ref=main        kind=tip      required=true
+    vllm  ../vllm               origin=vllm-project/vllm   ref=84030bbe...  kind=commit  required=false
+
+python3 tests/lib/trees.py list / get <角色> <字段> 读它；verify_a5.sh 前置检查会遍历所有角色：
+
+- 目录不在 → git clone <remote> <path>（required=false 的角色只提示不失败）；
+- origin 不一致 → git remote set-url；
+- kind=tip → fetch 后 checkout <分支> + reset --hard origin/<分支>；kind=commit → checkout --detach <commit>；
+- 脏树不自动切换（列出改动），切换前打印将被丢弃的提交（reflog 可找回）；
+- CP_BALANCE_AUTO_CHECKOUT=0 只报告不切换。
+
+其它自动化：harness 自身干净且落后 origin/main 时 `git pull --ff-only`；权重路径不存在时列出本机候选
+（CP_BALANCE_MODEL=<路径> 可覆盖）；树缺 vllm_ascend/_build_info.py 时提示重新构建，设
+CP_BALANCE_AUTO_BUILD=1 则直接在该树里跑 pip install -e . --no-build-isolation（日志 verify_a5_build_*.log）。

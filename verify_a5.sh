@@ -87,24 +87,36 @@ note "对照树=$BASE_REPO"
 hx_need_dir "被测代码树" "$CUR_REPO"
 hx_need_dir "对照代码树" "$BASE_REPO"
 hx_need_dir "权重" "$MODEL"
-# 代码版本对齐：不在目标分支/目标 commit 上就自动切过去（tests/lib/targets.tsv 定义目标分支）
+if [ -n "$MODEL" ] && [ ! -d "$MODEL" ]; then
+  cand=$(python3 "$HERE/tests/lib/trees.py" model-candidates 2>/dev/null | head -5)
+  if [ -n "$cand" ]; then
+    note "本机找到这些权重候选（可用 CP_BALANCE_MODEL=<路径> 覆盖）："
+    printf '%s
+' "$cand" | sed 's/^/       /'
+  fi
+fi
+# 代码版本对齐（tests/lib/trees.json 里维护）：树不在就 clone，版本不对就切到目标
 . "$HERE/tests/lib/sync_tree.sh"
 if [ "${CP_BALANCE_AUTO_CHECKOUT:-1}" = "1" ]; then
-  for pair in "cur=$CUR_REPO" "base=$BASE_REPO"; do
-    role=${pair%%=*}
-    dir=${pair#*=}
-    [ -n "$dir" ] || continue
-    branch=$(hx_tree_branch "$role" || true)
-    if [ -z "$branch" ]; then
-      note "$role：targets.tsv 没有该角色，跳过版本对齐"
-      continue
+  while IFS=$'	' read -r role tpath _tremote _tref _tkind _treq _texists; do
+    [ -n "$role" ] || continue
+    override=""
+    case "$role" in
+      cur)  override=$CUR_REPO ;;
+      base) override=$BASE_REPO ;;
+    esac
+    if ! hx_ensure_tree "$role" "$override"; then
+      bad "代码树就绪失败：$role"
     fi
-    if ! hx_sync_tree "$dir" "$branch" origin; then
-      bad "代码版本对齐失败：$role ($dir)，期望 $branch"
+  done < <(hx_tree_roles)
+  if [ -d "$HERE/.git" ] && [ -z "$(git -C "$HERE" status --porcelain 2>/dev/null | head -5)" ]; then
+    if git -C "$HERE" fetch --quiet origin main 2>/dev/null        && [ "$(git -C "$HERE" rev-parse HEAD)" != "$(git -C "$HERE" rev-parse origin/main 2>/dev/null)" ]; then
+      note "harness 落后 origin/main，执行 git pull --ff-only"
+      git -C "$HERE" pull --ff-only --quiet || warn "harness 自更新失败，继续用当前版本"
     fi
-  done
+  fi
 else
-  note "CP_BALANCE_AUTO_CHECKOUT=0：只显示当前版本，不自动切换"
+  note "CP_BALANCE_AUTO_CHECKOUT=0：只显示当前版本，不自动拉取/切换"
 fi
 
 for r in "$CUR_REPO" "$BASE_REPO"; do
@@ -121,6 +133,11 @@ fi
 # 构建产物：_build_info.py 由 setup.py 生成，缺了服务会在 import 阶段就死
 if [ -f "$CUR_REPO/vllm_ascend/__init__.py" ] && [ ! -f "$CUR_REPO/vllm_ascend/_build_info.py" ]; then
   bad "被测树缺构建产物 vllm_ascend/_build_info.py（服务会 ImportError: cannot import name '_build_info'）"
+  if [ "${CP_BALANCE_AUTO_BUILD:-0}" = "1" ]; then
+    note "CP_BALANCE_AUTO_BUILD=1：在 $CUR_REPO 里执行 pip install -e . --no-build-isolation（几分钟）"
+    ( cd "$CUR_REPO"       && { [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ] && . /usr/local/Ascend/ascend-toolkit/set_env.sh || true; }       && pip install -e . --no-build-isolation ) >"$HERE/verify_a5_build_$STAMP.log" 2>&1       && ok "构建完成（日志 verify_a5_build_$STAMP.log）"       || bad "自动构建失败，看 verify_a5_build_$STAMP.log"
+    [ -f "$CUR_REPO/vllm_ascend/_build_info.py" ] && ok "构建产物已生成"
+  fi
   cat <<'EOF'
   说明这棵树没有在本机构建/安装过（harness 用 PYTHONPATH 直接指到这棵树）。修法任选：
     a) 重新构建（推荐，同时生成 C 扩展）：
