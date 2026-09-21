@@ -165,6 +165,7 @@ while [ "$i" -lt "$n" ]; do
   fi
   log=$OUT/${id//\//_}.log
   printf '\n== %s ==\n' "$id"
+  printf '   [log] 测试输出: %s\n' "$log"
   t0=$(date +%s)
   if [ "$LIVE" = "1" ]; then
     HX_TEST_PATH=${id%%#*} HX_VARIANT=$var bash "$file" 2>&1 | tee "$log"

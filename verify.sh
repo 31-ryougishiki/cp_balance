@@ -68,7 +68,7 @@ if [ "$DIAG_ONLY" = 1 ]; then
 fi
 
 # ---------------- 0. 前置检查 ----------------
-[ "${HX_LIVE_LOG:-0}" = "1" ] && printf "[note] live-log：测试与模型服务日志实时打屏（同时写入 tests/_out）\n"
+[ "${HX_LIVE_LOG:-0}" = "1" ] && printf "[note] live-log：测试与模型服务日志实时打屏（文件照旧，见每个 stage 打印的日志路径）\n"
 step "0. 前置检查"
 missing=()
 [ -n "${CP_BALANCE_LOCAL_IP:-}" ] || missing+=(CP_BALANCE_LOCAL_IP)
@@ -288,10 +288,14 @@ while IFS='|' read -r id skip_flag builtin title; do
     *)
       cmd=$($HX_PY stage-run "$id") || { hx_fail "stage $id 没有 run 命令"; continue; }
       cmd=${cmd//\{out\}/$VERIFY_OUT}
+      # 日志在哪：run_tests 的每个测试一份 $VERIFY_OUT/<id 里 / 换成 _>.log；测试自己的产物
+      # （服务日志 tests/lib/service.sh 写在 $HX_OUT/<配置名>.log）在 $VERIFY_OUT/<id>/ 下。
+      stage_log="$VERIFY_OUT/${id//\//_}.log"
+      hx_note "stage $id 日志：$stage_log（服务日志：$VERIFY_OUT/$id/）"
       if bash -c "$cmd"; then
-        hx_ok "$id 通过"
+        hx_ok "$id 通过（日志 $stage_log）"
       else
-        hx_fail "$id 失败（日志在 $VERIFY_OUT/$id 下）"
+        hx_fail "$id 失败（测试输出 $stage_log；产物含服务日志 $VERIFY_OUT/$id/）"
         FAILED_STAGES+=("$id")
       fi ;;
   esac

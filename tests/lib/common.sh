@@ -18,6 +18,8 @@ HX_READY_TRIES=${HX_READY_TRIES:-$(hx_limit ready_tries)};  : "${HX_READY_TRIES:
 HX_READY_SLEEP=${HX_READY_SLEEP:-$(hx_limit poll_seconds)}; : "${HX_READY_SLEEP:=5}"
 HX_STOP_TRIES=${HX_STOP_TRIES:-$(hx_limit stop_tries)};     : "${HX_STOP_TRIES:=24}"
 HX_STOP_SLEEP=${HX_STOP_SLEEP:-$(hx_limit stop_seconds)};   : "${HX_STOP_SLEEP:=5}"
+# 等服务就绪时每隔多少秒报一次进度（尾行 + 日志路径），见 tests/lib/service.sh
+HX_READY_NOTE_S=${HX_READY_NOTE_S:-$(hx_limit ready_note_seconds)}; : "${HX_READY_NOTE_S:=60}"
 HX_TEST_PATH=${HX_TEST_PATH:-$(basename "$0" .sh)}   # 例：accuracy/a10_matrix_gate
 HX_VARIANT=${HX_VARIANT:-${1:-}}                     # 单独跑时位置参数就是变体
 HX_TEST_ID=$HX_TEST_PATH
@@ -111,12 +113,15 @@ hx_need_file() {  # <标签> <路径>
 }
 
 # ---- 服务生命周期：登记端口后立刻挂 EXIT trap，起服务中途失败/被打断也能收尾 ----
+# 进程与日志由 tests/lib/service.sh 负责；这里只做配置解析并保持原来的调用方式：
+#   port=$(hx_service_up <config> <logfile>)   # stdout 里只能有端口，别的都走 stderr
+. "$HX_LIB/service.sh"
 HX_PORT=""
-hx_cleanup() { [ -n "$HX_PORT" ] && hx_service_down "$HX_PORT" >/dev/null 2>&1; return 0; }
+hx_cleanup() { hx_svc_stop_all >/dev/null 2>&1; return 0; }
 trap hx_cleanup EXIT
 
-hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout
-  local cfg=$1 log=$2 port i
+hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout（stderr 上给日志路径与进度）
+  local cfg=$1 log=$2 port
   port=$(hx_cfg_field "$cfg" port)
   [ -n "$port" ] || { echo "[FAIL] $cfg has no port" >&2; return 1; }
   if ! hx_service_down "$port"; then
@@ -124,62 +129,19 @@ hx_service_up() {  # <config> <logfile>；成功只把端口打到 stdout
     return 1
   fi
   HX_PORT=$port
-  # 独立会话，停服时能连整组 mp worker 一起收：setsid 没有就退回普通后台进程
-  # HX_STREAM_SERVICE_LOG=1：服务日志同时 tee 到测试 stdout（run_tests.sh --live-log 会打开），文件照旧用于解析
-  if command -v setsid >/dev/null 2>&1; then
-    HX_SETSID=1
-    if [ "${HX_STREAM_SERVICE_LOG:-0}" = "1" ]; then
-      setsid bash run.sh "$cfg" > >(tee "$log") 2>&1 &
-    else
-      setsid bash run.sh "$cfg" > "$log" 2>&1 &
-    fi
-  else
-    HX_SETSID=0
-    if [ "${HX_STREAM_SERVICE_LOG:-0}" = "1" ]; then
-      nohup bash run.sh "$cfg" > >(tee "$log") 2>&1 &
-    else
-      nohup bash run.sh "$cfg" > "$log" 2>&1 &
-    fi
-  fi
-  HX_PID=$!
-  # 服务起停约 10 分钟，重试上限见 harness.json limits.ready_tries（HX_READY_TRIES 可覆盖）
-  for i in $(seq 1 "$HX_READY_TRIES"); do
-    curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null && break
-    if [ -n "$HX_PID" ] && ! kill -0 "$HX_PID" 2>/dev/null; then
-      echo "[FAIL] $cfg exited before it became ready (pid $HX_PID); tail of $log:" >&2
-      tail -n 20 "$log" >&2
-      HX_PORT=""
-      return 1
-    fi
-    sleep "$HX_READY_SLEEP"
-  done
-  if ! curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null; then
-    echo "[FAIL] $cfg not ready on port $port after $((HX_READY_TRIES * HX_READY_SLEEP))s; tail of $log:" >&2
-    tail -n 20 "$log" >&2
+  hx_svc_start "$port" "$cfg" "$log" || return 1
+  # 服务起停约 10 分钟，重试上限与报进度间隔见 harness.json limits
+  if ! hx_svc_wait_ready "$cfg" "$log" "$port"; then
+    hx_svc_stop "$port" >/dev/null 2>&1
+    HX_PORT=""
     return 1
   fi
+  hx_svc_note "$cfg 就绪：port=$port 日志=$log"
   echo "$port"
 }
 
 hx_service_down() {  # <port>：端口已停返回 0，HX_STOP_TRIES*HX_STOP_SLEEP 秒后仍在应答返回 1
-  local port=$1 i
-  if [ -n "${HX_PID:-}" ]; then
-    if [ "${HX_SETSID:-0}" = "1" ]; then
-      kill -TERM -"$HX_PID" 2>/dev/null    # 整个会话/进程组：vllm 的 mp worker 也在里面
-    else
-      kill -TERM "$HX_PID" 2>/dev/null
-    fi
-    HX_PID=""
-  fi
-  pkill -f -- "--port $port" >/dev/null 2>&1
-  for i in $(seq 1 "$HX_STOP_TRIES"); do
-    if ! curl -sf --noproxy '*' "http://127.0.0.1:$port/v1/models" >/dev/null; then
-      HX_PORT=""
-      return 0
-    fi
-    sleep "$HX_STOP_SLEEP"
-  done
-  hx_warn "port $port still answering $((HX_STOP_TRIES * HX_STOP_SLEEP))s after stop"
+  hx_svc_stop "$1" || { hx_warn "port $1 still answering after stop"; return 1; }
   HX_PORT=""
-  return 1
+  return 0
 }

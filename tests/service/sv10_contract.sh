@@ -9,7 +9,7 @@ source "$(dirname "$0")/../lib/common.sh"
 
 arg=${1:-${HX_VARIANT:-svc_cp1}}
 if ! hx_svc_up "$arg"; then
-  hx_fail "service $arg not ready (see $HX_OUT/$arg.log)"
+  hx_fail "service $arg not ready (config ${HX_CFG:-?}, log ${HX_LOG:-$HX_OUT})"
   hx_end
   exit 1
 fi

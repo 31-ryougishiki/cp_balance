@@ -489,12 +489,17 @@ cd /home/z30055003/cp_balance
 export CP_BALANCE_LOCAL_IP=$(ip -o -4 addr show | awk '$2!="lo"{print $4}' | cut -d/ -f1 | head -1)
 export CP_BALANCE_NIC_NAME=$(ip -o -4 addr show | awk '$2!="lo"{print $2}' | head -1)
 bash verify.sh                    # 前置 -> 静态 -> 冒烟(拉起模型) -> 分支诊断 -> 打包
-bash verify.sh --live-log         # 同上，另外把测试与模型服务日志实时打屏
+bash verify.sh --live-log         # 同上，另外把测试与模型服务日志实时打屏（默认只写文件）
 bash verify.sh --skip-smoke       # 不起服务，只做前置与静态检查
 bash verify.sh --family a3        # 换机器族（a5/a3）
 bash verify.sh --skip-smoke       # 跳过某个 stage（--skip-service 跳过服务整体那一段）；--diag-only 只对最近一轮证据出诊断
 bash verify_a5.sh                 # 兼容老入口 = bash verify.sh --family a5
+bash tests/run_tests.sh --only smoke/s08_service_log_wiring --live-log   # 日志链路自检（假服务，20 秒，不占 NPU）
 ```
+
+日志在哪：每个 stage 打一行 `[note] stage <id> 日志：tests/_out/<stamp>_<family>/<id>.log`（run_tests 的测试输出）；
+服务日志是 `tests/_out/<stamp>_<family>/<测试 id>/<配置名>.log`（服务进程直接写这个文件，
+`--live-log` 时另起 `tail -F` 把它跟到屏幕；等就绪期间每 60s 一行进度，起不来会带日志路径/大小/尾部）。
 
 只需 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME`（可选 `CP_BALANCE_DEVICES` / `CP_BALANCE_REPO` /
 `CP_BALANCE_BASE_REPO` / `HX_READY_TRIES`）；`VLLM_USE_V2_MODEL_RUNNER=0` 在 `configs/_base.json` 里，
