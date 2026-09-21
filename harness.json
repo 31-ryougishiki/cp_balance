@@ -116,7 +116,7 @@
         },
         {
           "title": "DSA-CP / runner 相关行（去重，最多 20 条）",
-          "grep": "(DSA[- _]?CP|dsa_cp|Model Runner V[12]|data_parallel_size|sequence_parallel_moe).*",
+          "grep": "(DSA[- _]?CP|dsa_cp|Model Runner V[12]|data_parallel_size|sequence_parallel_moe|moe_comm_type|MC2).*",
           "post": "sort_uniq_head20"
         }
       ],
