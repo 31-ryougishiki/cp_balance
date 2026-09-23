@@ -179,6 +179,7 @@ harness 侧同步：删掉 `reduce_mode` 字段/环境变量/指纹字段与 3 �
 | S1 唯一变量 | `cp_balance` = `d06883a99` | 只改行布局：模型边界恢复 upstream + attention 内选行/放回（含 per-layer plan 透传）+ 纯测试/文档 | **会** | C 矩阵（阶段 1） |
 | S2 清理 | `cp_balance_stage2` 里的 `2a14d5c91` | 删本部署不可达的失效路径（fixed_order 归约 + `reduce_mode`/`EMBED_LOCAL`、`mc2_mask` 重排、全局 `zigzag_active()`、`forward_zigzag_local`、边界 helper） | 不会 | 不单独跑 |
 | S3 latent | `cp_balance_stage2` 的 tip `f1bb3c915` | `g_proj` 的 gate 行绑定（GLM-5.2 无 `g_proj`，不可达） | 不会 | 不单独跑 |
+| S4 出口搬运融合 | `cp_balance_perf` 的 tip `c3b7d2d8b`（= S1+S2+S3 + 1 个提交） | 把出口反排列融进那一次写入（`index_select(..., out=)`，带 fallback） | 不会（写入的是同一批值） | 可与阶段 2 一起跑；若阶段 2 结果与阶段 1 不同，先回退这一个提交 |
 
 S2/S3“不会影响”的依据：2026-09-22 那轮 cp1 日志里 `[CP_BALANCE][reduce]` 0 行、mc2 相关 0 行、
 `sequence_parallel_moe`/`mlp_tp`/`g_proj` 0 行；S2 删的代码只在 mlp-tp / SP-only / MC2 / g_proj
@@ -211,6 +212,29 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix                
   但**不再**出现 `[CP_BALANCE][reduce] path=fixed_order`（S1 里这条路径已不可达，S2 起直接删除）；
 - `c_vs_b` 的 `first-token match: 40/40`（long 20/20）；
 - `max_completion_tokens` 在 pinned vLLM 上可能被忽略，脚本已有 `max_tokens` 兜底。
+
+## 6b. 出口搬运优化（S4，分支 `cp_balance_perf`）
+
+zigzag 的 o_proj 出口原本是三步：all_gather → `gathered[inv]` 生成新张量 → 拷进 `output`。
+其中后两步只是把同一批值按自然序搬一遍，属于“为了把行序摆回自然序”付的搬运费。S4 把反排列
+融进写入本身（helper 用 `index_select(gathered, 0, inv[:N], out=output)`；拿不到 out 变体时回退
+gather+copy 并在日志里 warning 一次），于是：
+
+| 每层出口（T=2784, H=6144, bf16） | 搬运量 | 算子数 |
+| --- | --- | --- |
+| S1（gather + copy） | all_gather 34MB + 反排列 68MB + 拷贝 68MB ≈ **171MB** | all_gather + index_select + copy |
+| S4（融进写入） | all_gather 34MB + 直写 68MB ≈ **103MB** | all_gather + index_select(out=) |
+| `cp_balance=0`（连续切片） | all_gather 34MB + 拷贝 68MB ≈ **103MB** | 同 S4 |
+
+即 S4 之后**每层出口与 cp0 完全等价**（少 68MB/层、少 1 个算子/层；78 层约 −5.3GB/forward）。
+语义不变：写进 `output` 的仍是同一批值，只是排列方式换了实现（新增
+`tests/ut/layers/test_cp_zigzag_exit_write.py` 用真 `build_zigzag_plan` 的排列核对“融合写入 ==
+gather+copy”、尾部丢 padding、行数不匹配报错；本地已跑过）。
+
+**仍然没消掉的**：attention 入口那次选行 gather（本 rank 的 `[prev,next]` 行在自然序里是两段，
+不是连续区间）。它的量级是 ≈8.6MB/层（读 4.3 + 写 4.3），78 层 ≈ 0.7GB/forward，属于百分点级；
+要清零只能把模型主流改成“拼接序”（每层入口退化成连续切片、出口连反排列都不需要），
+但那要同时改 embedding 输入、runner/MTP 的取行与 aux 路径，是独立一轮验证的事。
 
 ## 7. 已知的残留风险与离线验证
 

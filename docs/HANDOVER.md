@@ -10,6 +10,7 @@
 | harness（本仓） | `main` | `b4201fb` | 启动/配置/测试脚手架 + 工程文档（含 2026-09-23 的开关清理与文档） |
 | vllm-ascend（S1 唯一变量） | `cp_balance` | `d06883a99` | 移植版 + 本地修复 + 2026-09-23 行布局修复（§3.5/§4.1），已 push |
 | vllm-ascend（全量） | `cp_balance_stage2` | `f1bb3c915` | S1 + S2 清理 + S3 latent；验收阶段把 `cp_balance` fast-forward 到这里 |
+| vllm-ascend（全量+性能） | `cp_balance_perf` | `c3b7d2d8b` | `cp_balance_stage2` + 出口搬运融合（语义等价，见 `docs/dp1_zigzag_acc_fix.md` §6b） |
 | vllm-ascend-base（参照） | `base-dp1` | `1bf45408f` | = main aff1b74b6 + dp=1 放开门一行；harness 自动对齐到这个分支 |
 | vllm | 固定 commit | `84030bbe3d` | `harness.json trees.vllm`，`required=false` |
 
