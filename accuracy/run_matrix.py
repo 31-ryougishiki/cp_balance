@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 import serve_config  # noqa: E402 - needs ROOT on sys.path first
 
 HERE = Path(__file__).resolve().parent
-COUNTS = ("path=fixed_order", "path=native", "branch=ZIGZAG", "[CP_BALANCE][plan]", "branch=CONTINUOUS")
+COUNTS = ("branch=ZIGZAG", "[CP_BALANCE][plan]", "branch=CONTINUOUS")
 
 
 def wait_port_free(port: int, timeout: int = 60) -> bool:

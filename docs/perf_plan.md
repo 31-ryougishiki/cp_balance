@@ -1,5 +1,7 @@
 # cp_balance 性能测量与优化方案
 
+> 2026-09-23：zigzag 改为 attention 内部选行（模型主流恢复 replicated），本文中“模型边界切行/固定序归约”的描述已过时，见 `docs/dp1_zigzag_acc_fix.md`。
+
 对象：`vllm-ascend`（分支 `cp_balance`，当前 b64c9569b）相对 `vllm-ascend-base`
 （`base-dp1` 分支 = `main` aff1b74b6 + dp=1 门修一行）新增的 cp_balance。
 模型 GLM-5.2-W4A8C8，TP16，DSA-CP（dp=1、SP 关闭；见 `docs/scripts_review.md` §4.1/§8）。
@@ -12,16 +14,16 @@
 四个配置串行跑，每个配置一次服务起停（约 10 分钟启动）：
 
     cd <harness>
-    bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a
+    bash tests/run_tests.sh --only perf
 
-| 配置 | 代码树 | CP_BALANCE | REDUCE_MODE | 作用 |
-| --- | --- | --- | --- | --- |
-| prof_cur_cp0 | 当前 | 0 | - | 与 base 等价的噪声基准 |
-| prof_cur_cp1 | 当前 | 1 | allreduce | zigzag 现状（默认归约） |
-| prof_cur_cp1_a2a | 当前 | 1 | alltoall | zigzag + 低通信量归约 |
+| 配置 | 代码树 | CP_BALANCE | 作用 |
+| --- | --- | --- | --- |
+| prof_cur_cp0 | 当前 | 0 | 与 base 等价的噪声基准 |
+| prof_cur_cp1 | 当前 | 1 | zigzag 现状 |
+| prof_cur_cp0_repeat | 当前 | 0 | 同路径重跑（噪声地板） |
 
 （表里用的是 A3 的配置名；`CP_BALANCE_FAMILY=a5` 时实际跑 `prof_a5_*`，由 `tests/lib/roles.tsv` 决定。）
-| prof_base_cp0 | base | 0 | - | 原版 DSA-CP 参照 |
+| prof_base_cp0 | base | 0 | 原版 DSA-CP 参照 |
 
 `prof_cur_cp0` 与 `prof_base_cp0` 的差异就是测量本身的噪声地板；两者不重合时，
 后面所有对比都不可信，先解决测量问题。
@@ -53,7 +55,7 @@ communication.json），加上 prof_<name>.json、profile_<name>.log 的指纹�
 
 - 要回答的三个问题都是“每层开销 vs 每步开销的比值”和“rank 间失衡”，而 6 层会把
   每步固定开销（metadata、embedding、出口 gather、logits）的占比放大约 13 倍。
-  用它来判断 cp_balance 划不划算、H0 和 H1 谁是大头，会得到错的结论。
+  用它来判断 cp_balance 划不划算、H0 是不是大头，会得到错的结论。
 - `profile_order.py` 的顺序与归因只读一个 rank 的 trace，78 层和 6 层的做法完全一样，
   全量并不额外花时间。
 - 全量只比 6 层多约 35 分钟的一次性启动时间，不是瓶颈；而 6 层依赖
@@ -69,16 +71,16 @@ communication.json），加上 prof_<name>.json、profile_<name>.log 的指纹�
 
 ### 全量一轮的四组配置
 
-| 配置 | 代码树 | CP_BALANCE | REDUCE_MODE | 回答什么 |
-| --- | --- | --- | --- | --- |
-| `prof_cur_cp0` | 当前 | 0 | allreduce | 不开 cp_balance 的基线（也是与 base 的等价性对照） |
-| `prof_cur_cp1` | 当前 | 1 | allreduce | H0：o_proj 全量权重 all_gather 占多少；zigzag 的净收益 |
-| `prof_cur_cp1_a2a` | 当前 | 1 | alltoall | H1：默认 allreduce 归约比低通信量的 alltoall 贵多少 |
-| `prof_base_cp0` | base | 0 | - | 噪声地板（与 `prof_cur_cp0` 应几乎重合） |
+| 配置 | 代码树 | CP_BALANCE | 回答什么 |
+| --- | --- | --- | --- |
+| `prof_cur_cp0` | 当前 | 0 | 不开 cp_balance 的基线（也是与 base 的等价性对照） |
+| `prof_cur_cp1` | 当前 | 1 | H0：o_proj 全量权重 all_gather 占多少；zigzag 的净收益 |
+| `prof_cur_cp0_repeat` | 当前 | 0 | 同路径重跑（噪声地板） |
+| `prof_base_cp0` | base | 0 | 噪声地板（与 `prof_cur_cp0` 应几乎重合） |
 
 四个配置共用 `_profile_common.json`，所以 `enforce-eager`、
 `VLLM_CUSTOM_SCOPES_FOR_PROFILING`、`debug=0`、`MIN_TOKENS` 都一致，
-唯一变量就是上表那两列。
+唯一变量就是上表的 `CP_BALANCE` 那列。
 
 ### 算子顺序与代码归因（profile_order.py）
 
@@ -121,10 +123,10 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里没有任何命名区间，�
 
 1. step_trace_time.csv 的每步 Computing 在 rank 间的 max/mean 比。cp_balance 是负载
    均衡改造，这个比值从 CP=0 的失衡降到接近 1，才说明改造有效。
-2. HCCL 算子总时间与调用次数（compare 输出的 comm 一节）。zigzag 引入的额外集合
-   通信如果超过它省下的 attention 时间，功能就是负收益。
+2. HCCL 算子总时间与调用次数（compare 输出的 comm 一节）：zigzag 不再改归约，
+   两侧的集合通信构成应基本一致。
 3. 算子构成差（compare 输出的 delta 一节）。FlashAttentionScore / LightningIndexer
-   应当下降，Hccl* 应当上升；两者的绝对差值直接给出净收益。
+   的 rank 间分布应当变均衡：zigzag 只改 attention 内部的选行/放回。
 4. 客户端 mean_elapsed_s（prof_<name>.json）只作交叉验证：profiling 本身有开销，
    绝对值不作为结论。
 
@@ -136,7 +138,7 @@ nullcontext（`vllm/v1/utils.py:747`），trace 里没有任何命名区间，�
 （model_runner_v1.py:2974，按 attention group 分组，同一 group 的层共享一份
 metadata），所以 metadata builder 里的开销是每步一份，而 linear_op.py /
 register_custom_ops.py 里的开销是每层一份（78 层）。metadata 侧的冗余因此只是
-顺手删掉，真正要测的是 H0 与 H1。
+顺手删掉，真正要测的是 H0。
 
 ### H0：基线里可能最大的通信项是每层的 o_proj 全量权重 all_gather（先确认）
 
@@ -153,23 +155,11 @@ AscendSFAImpl.o_proj_full_pools），等待点在 o_proj 使用前（sfa_v1.py:2
 值得优化的地方。第一轮 profiling 必须先区分：trace 里 Hccl...AllGather 的总时间占比
 是多少、调用次数是不是约 78x2（权重 + 量化参数）。
 
-若它确实占大头，那么删掉每层权重 all_gather 的收益会远大于调 cp_balance 的归约模式；
-反之才轮到 H1。
+若它确实占大头，那么删掉每层权重 all_gather 的收益会远大于调 cp_balance 本身。
 
-### H1：默认归约模式把 row-parallel 通信量翻倍（高，每层）
+### H1：默认归约模式（已作废）
 
-VLLM_ASCEND_CP_BALANCE_REDUCE_MODE=allreduce（默认）在
-vllm_ascend/distributed/utils.py 的 _allreduce_slice_reduce_scatter 里做的是
-dist.all_reduce 再切自己那一段。AllReduce 的通信量约为 ReduceScatter 的 2 倍。
-
-被替换掉 ReduceScatter 的位置共三处，都在每层的前向路径上：
-
-- vllm_ascend/ops/linear_op.py:208（MLP/MoE row-parallel）
-- vllm_ascend/ops/linear_op.py:466（o_proj / down_proj）
-- vllm_ascend/ops/register_custom_ops.py:119（embedding 与 MoE finalize）
-
-验证：对比 `prof_*_cp1` 与 `prof_*_cp1_a2a` 的 HCCL 时间与次数。实测结论（`docs/cp_balance_review_round2.md` §4-D2）：
-16 次归约/窗口约 12ms，占窗口 0.018%，而轮间漂移 5~13% —— 量级不够判定，**默认值保持 allreduce，不改**。
+（2026-09-23 起 `reduce_mode` 及其 A/B 已随 zigzag 改法删除，见 `docs/dp1_zigzag_acc_fix.md`。）
 
 ### H2：每层多一层 Python 包装（已消除）
 
@@ -194,13 +184,9 @@ index_select，不是重算一张表；而且 metadata 每步只建一次。收�
 第二份只在 zigzag 被回退时才用到，而资格判定已经把 draft / V2 runner / DP>1 全部拒掉，
 即回退在正常路径上不会发生（第 4 节 S9 记录了这一冗余）。
 
-### H4：embedding 边界多两次集合通信（低，每步）
+### H4：embedding 边界多两次集合通信（已作废）
 
-默认路径一次 forward 在 embedding 处走三次通信：register_custom_ops.py:119 的 all_reduce
-（结果只留 L 行，全量结果被丢）→ patch_deepseek_v2.py:368 又 all_gather 回 T 行 → zigzag
-切片。VLLM_ASCEND_CP_BALANCE_EMBED_LOCAL=1 的 vocab_parallel_embedding.py:170
-forward_zigzag_local 是替代方案，但要付一次全量 hidden 的 all_reduce。量级是每 forward
-两次全量集合通信（约 2x110MB），相对 H0/H1 可忽略，等 profiling 数据再决定。
+（2026-09-23 起 embedding 边界切行与 `VLLM_ASCEND_CP_BALANCE_EMBED_LOCAL` 已随 zigzag 改法删除，见 `docs/dp1_zigzag_acc_fix.md`。）
 
 ## 4. 已完成的精简（commit 658b836ba）
 
@@ -219,16 +205,12 @@ pyflakes + check_b_path.py 静态门控兜一遍。
 | S8 | patch_deepseek_v2.py _zigzag_layer_forward + _patched_decoder_layer_forward | 删（约 85 行）；前提是 DP=1 下 use_sequence_parallel_moe 恒假（该前提的更正见 H2 段） |
 | S9 | cp_zigzag.py zigzag_shard_positions、zigzag_shard_tensor 的重复 dim 分支 | 删/合并（zigzag_shard_positions 就是 zigzag_shard_tensor(x, 0)） |
 | S10 | model_runner_v1.py _pad_for_sequence_parallelism 未使用的 num_scheduled_tokens_np 形参 | 删 |
-| P1 | distributed/utils.py _allreduce_slice_reduce_scatter 的 contiguous().clone() | 改为就地 AllReduce（三处调用点的输入归约后都不再使用），省一次全量拷贝/层/站点 |
-| P2 | distributed/utils.py 每层 os.getenv 重解析 REDUCE_MODE | 改为 lru_cache 模块级解析一次 |
 | P3 | sfa_v1.py 两个 KV writer 各做一次 slot_mapping[zigzag_gather_index] | 改为 metadata 建时算一次，存 DSACPContext.slot_mapping_cp_gathered |
 
 保留但记录在案：
 
 - SGLang 遗留的 effective_query_lens / block_sizes / query_lens 等 plan 字段没有运行期
   成本，留着便于读代码。
-- reduce_mode 的三种实现（allreduce / alltoall / reducescatter）保留，H1 的 A/B 需要它；
-  等数据出来再决定留几个。
 - attention/utils.py 的 is_prefilling_cpu 与 is_prefilling 目前是同一个对象，但上游把
   is_prefilling 标注成 torch.Tensor（vllm/v1/attention/backend.py:459），保留一个显式
   声明 host 侧的字段，避免以后有人传设备张量进来。
@@ -247,12 +229,11 @@ pyflakes + check_b_path.py 静态门控兜一遍。
    脚本跑几十秒到几分钟且没有进度输出，看着像卡死；而它覆盖的那套不变量在上一轮改动里
    没有被动过（只删了 ZigzagPlan 的无读取点字段），并且已经用等价条件跑过 700 组通过。
    真要重做这一步时，把它写成 20 组、带进度输出的一次性脚本即可。
-2. 跑 bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a（78 层四组 + 解析 + 报告）。它一次给出全部结论依据：
+2. 跑 bash tests/run_tests.sh --only perf（78 层四组 + 解析 + 报告）。它一次给出全部结论依据：
    rank 间 step Computing 的 max/mean、HCCL 次数与时间、算子构成差、以及 rank0 的
    算子顺序与 device 归因。回传 summary.json + export/ + order_rank0.json +
    prof_*.json + 服务日志的指纹行。
 3. 只有想在两次优化之间快速复看顺序/归因时，才跑 bash perf/profile_l6.sh（6 层，结论不取它）。
-4. 依据 H0/H1 的实测结果决定：默认归约模式（allreduce 就地化 / 改 alltoall）、是否
-   继续动 o_proj 权重 all_gather、以及是否做余数分配重写。
+4. 依据 H0 的实测结果决定：是否继续动 o_proj 权重 all_gather、以及是否做余数分配重写。
 5. 优化落地后重跑 prof_cur_cp0 / prof_cur_cp1 验证收益，并用
    compare_first_token.py compare --require-text 确认数值验收仍 PASS。

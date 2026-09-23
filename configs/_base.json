@@ -6,7 +6,6 @@
   "port": 8034,
   "cp_balance": 0,
   "min_tokens": 2048,
-  "reduce_mode": "allreduce",
   "debug": 1,
   "deterministic": true,
   "deterministic_env": {

@@ -1,5 +1,7 @@
 # cp_balance 远端验证清单（本轮精简之后）
 
+> 2026-09-23：zigzag 改为 attention 内部选行（模型主流恢复 replicated），本文中“模型边界切行/固定序归约”的描述已过时，见 `docs/dp1_zigzag_acc_fix.md`。
+
 配套文档：`docs/cp_balance_review_round2.md`（问题与精简清单）。本清单只回答两件事：
 **改完之后怎么验收**、**哪些开放项必须靠远端定性**。
 
@@ -26,7 +28,7 @@ STEP 3（可选 A/B，`accuracy/a30_slot_filter_ab`）现状恒 SKIP：`round2_v
 
 ---
 
-## 0. 这一轮验证什么（6 条断言）
+## 0. 这一轮验证什么（5 条断言）
 
 本轮的代码改动是"删无读者字段 / 去死别名 / 合并重复分支"（5 文件，净 −43 行），理论上不碰数值路径；
 远端这一轮的目的**不是再证明一遍算法**，而是给这批删改上一个回归网，同时把两个便宜的开放项
@@ -38,11 +40,9 @@ STEP 3（可选 A/B，`accuracy/a30_slot_filter_ab`）现状恒 SKIP：`round2_v
 | 2 | 合并 topk/SFA 分支后，zigzag 与连续两条路径的 kernel 入参完全一致 | §1 C 验收 | `first-token match: 40/40` |
 | 3 | `_indexer_qk_proj` 的 `output_dtype` 改成必填后没有第二处调用点（含 DCP 子类） | §1（zigzag 路径）+ §2（连续路径） | 无 `TypeError`，两侧都 PASS |
 | 4 | `_pad_for_sequence_parallelism` 与 forward-context 写入的内联改动对所有 forward 无影响 | §2 B 等价性 + 噪声地板 | `b_vs_base` 与 `noise_floor` 都 PASS |
-| 5 | 固定序归约用的 TP 域与 MoE 的 EP 域同域（隐式前提） | 未落地：`[CP_BALANCE][group]` 这行只是当年打算加的临时补丁，当前树里不存在 | — |
-| 6 | zigzag 的 KV 写依赖 `slot == -1` 被 scatter 跳过 | `accuracy/a30_slot_filter_ab` 已恒 SKIP（锚点失效） | 不再执行 |
+| 5 | zigzag 的 KV 写依赖 `slot == -1` 被 scatter 跳过 | `accuracy/a30_slot_filter_ab` 已恒 SKIP（锚点失效） | 不再执行 |
 
-不做（别重复花机时）：C1/C2/C4 尚未落地；profiling / H0 / H1 已有结论（见 §7）；
-`VLLM_ASCEND_CP_BALANCE_EMBED_LOCAL` 默认关且与本轮改动无关，要决定留删另开一轮。
+不做（别重复花机时）：C1/C2/C4 尚未落地；profiling / H0 已有结论（见 §7）。
 
 前置（1 分钟）：
 
@@ -91,13 +91,6 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix
 `b_vs_base`（当前树 CP_BALANCE=0 vs base）与 `noise_floor`（base 重复两次）都要 PASS。
 噪声地板 FAIL 说明测量本身不可复现，先解决测量再谈代码。
 
-日志侧同时核对（证明 CP_BALANCE=0 走的还是原集合通信）：
-
-```bash
-grep -c '\[CP_BALANCE\]\[reduce\] path=native' matrix_*/cur_cp0.log   # > 0
-grep -c 'path=fixed_order' matrix_*/cur_cp0.log                          # == 0
-```
-
 ---
 
 ## 3. 分支自证（zigzag 真的在跑）
@@ -119,29 +112,9 @@ python3 accuracy/check_branch.py --url http://127.0.0.1:8035 --log cp_on.log
 
 ---
 
-## 4. 开放项 A3：EP 域 == TP 域（建议顺手落地的加固）
+## 4. 开放项 A3：EP 域 == TP 域（已作废）
 
-背景：固定序归约（`ops/register_custom_ops.py:38`）用 TP 域，而 MoE 的 dispatch/all-gather 走 EP 域；
-DP=1 时两者同域，但代码里没有任何断言（见报告 §2.6-4）。
-
-临时验证补丁：`vllm_ascend/ascend_forward_context.py`，在
-`forward_context.zigzag_cp_active = zigzag_cp_active` 之后加：
-
-```python
-if zigzag_cp_active:
-    from vllm.distributed.parallel_state import get_ep_group
-
-    tp_group, ep_group = get_tp_group(), get_ep_group()
-    logger.info_once(
-        "[CP_BALANCE][group] tp=%d/%d ep=%d/%d",
-        tp_group.world_size, tp_group.rank_in_group,
-        ep_group.world_size, ep_group.rank_in_group,
-    )
-```
-
-判据：日志里出现 `[CP_BALANCE][group] tp=16/0 ep=16/0`（16 个 rank 上 rank 值随 rank 递增）。
-若 EP 域的 world_size/rank 与 TP 不同 → 固定序归约必须换成 EP 域（否则"第几段"与聚合序对不上）。
-验证过就可以保留这行 `info_once`（成本：每进程一次）。
+（2026-09-23 起 `reduce_mode` 及其 A/B 已随 zigzag 改法删除，见 `docs/dp1_zigzag_acc_fix.md`。）
 
 ---
 
@@ -179,55 +152,26 @@ indexer 那处同理（`idx_slots` / `k_li` / `k_li_scale` 用同一个 `keep` �
 
 ---
 
-## 6. 开放项 A1/A2 的补丁（若本轮决定修）
+## 6. 开放项 A1/A2 的补丁（已作废）
 
-### A1 就地 AllReduce 与 `mutates_args=[]` 冲突
-
-二选一（报告 §2.5-1）：
-
-```diff
---- a/vllm_ascend/distributed/utils.py
-+++ b/vllm_ascend/distributed/utils.py
-@@ -48,7 +48,7 @@ def _allreduce_slice_reduce_scatter(tensor, group):
-     summed = tensor if tensor.is_contiguous() else tensor.contiguous()
-     dist.all_reduce(summed, group=group.device_group)
-     rank = int(group.rank_in_group)
--    return summed[rank * chunk : (rank + 1) * chunk].contiguous()
-+    return summed[rank * chunk : (rank + 1) * chunk].clone()
-```
-
-或者显式声明契约（`ops/register_custom_ops.py` 的 `maybe_pad_and_reduce` 注册处）：
-`mutates_args=[]` → `mutates_args=["x"]`（`matmul_and_reduce` 那处改的是层内新张量，
-核对后决定是否一起改）。
-
-验证：`matrix_b_vs_base` + `matrix_c_accept` 双 PASS；另外记一笔：本仓库默认
-`--enforce-eager`，A1 的风险只在 compile / ACL graph 场景暴露。
-
-### A2 宽异常包住集合通信
-
-把 `ops/linear_op.py:203-213` 与 `ops/register_custom_ops.py:34-48` 的 `try/except` 收窄：
-`rows % world_size != 0`、group 缺失、mode 非法这些**前置条件**先判断并直接回退；
-通信调用本身不要再被 `try` 包住（单 rank 抛错后改发另一种集合通信 = 挂死）。
-
-验证：把 `VLLM_ASCEND_CP_BALANCE_REDUCE_MODE` 设成非法值，应当报 `ValueError` 而不是静默回落。
+（2026-09-23 起 `reduce_mode` 及其 A/B 已随 zigzag 改法删除，见 `docs/dp1_zigzag_acc_fix.md`。）
 
 ---
 
 ## 7. 若要继续 profiling：先把可判定性补上
 
-上一轮四轮 profiling 的证据（`data/send/export/*op_statistic.csv`，rank0）：
+上一轮 profiling 的证据（`data/send/export/*op_statistic.csv`，rank0）：
 
 | 轮 | reduce_scatter | allreduce | 备注 |
 | --- | --- | --- | --- |
 | `cur_cp0` | 4936 次 / 10.13 s | 0 | 与 `base_cp0` 条数完全相同 |
 | `cur_cp1` | 4920 次（−16）/ 11.47 s | 16 次 / 12.2 ms | 同一条 RS 自身慢 13% |
-| `cur_cp1_a2a` | 4920 次（−16）/ 10.83 s | alltoall +16 | |
 
 结论口径：16 次归约在窗口里只值 12 ms（0.018%），而同一算子跨轮慢 13% → **轮间漂移比效应大两个数量级**，
-不要用这一轮数据改 `REDUCE_MODE` 默认值。若还要测：
+不要用这一轮数据改默认值。若还要测：
 
 1. 每个配置至少 2 轮，只比较**同一轮内**的差值；
-2. 先核对"次数"（zigzag 相对非 zigzag 应恰好 −16 RS / +16 AR，a2a 模式是 +16 alltoall），次数不对说明配置没生效；
+2. 先核对"次数"（zigzag 只改 attention 内部的选行/放回，两侧的集合通信构成应一致），次数不对说明配置没生效；
 3. profiling 轮保持 `debug=0`；`trace_view.json` 别整文件加载（上一轮 3.1 GB 直接解析失败），
    用 `perf/profile_order.py --trim` 或 6 层配置。
 
@@ -241,6 +185,5 @@ indexer 那处同理（`idx_slots` / `k_li` / `k_li_scale` 用同一个 `keep` �
 | `matrix_*/summary.txt` | C 验收 / B 等价性裁定 |
 | `cp_on.log` 前 200 行（含 `[cp_balance] REPO=` 与 `additional_config` 指纹） | 确认代码树与开关 |
 | `[CP_BALANCE][branch]` 行 | 证明走的是 ZIGZAG 还是 CONTINUOUS 及原因 |
-| `[CP_BALANCE][group]` 行（§4 加的） | A3 结论 |
 | §5 过滤版/未过滤版的首 token JSON | A4 结论 |
-| `prof_*/summary.json` + `export/` | 若继续 H0/H1 |
+| `prof_*/summary.json` + `export/` | 若继续 H0 |

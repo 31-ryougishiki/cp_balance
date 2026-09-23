@@ -370,7 +370,6 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
         "repo": cfg.get("repo"),
         "head": serve_config.git_head(cfg.get("repo")),
         "cp_balance": cfg.get("cp_balance"),
-        "reduce_mode": cfg.get("reduce_mode"),
         "min_tokens": cfg.get("min_tokens"),
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "mode": "lengths" if lengths else "single",

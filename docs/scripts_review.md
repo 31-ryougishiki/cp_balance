@@ -342,36 +342,48 @@ bash verify.sh --family a5 --diag-only
 4. round2_verify 的补丁锚点 —— 不修。tests/accuracy/a30_slot_filter_ab 保持 SKIP（提示 driver stale），可选 A/B 不再纳入验收；a10/a20 的 C/B/噪声地板不受影响。
 5. MTP draft 的 for_draft —— 接上，见 4.3c。
 
-## 8. 追加发现（2026-09-21 晚）：dp=1 下 zigzag 还有第三处结构性问题（MoE 布局）
+## 8. dp=1 下 zigzag 的结构性问题（2026-09-21 发现，2026-09-23 定案并修复）
 
-来源：dp>1 的分阶段考证（阶段性结论见 4.1c）+ 随后的代码核对。
+发现时的事实链（结论已在 2026-09-23 被远端精度数据证实）：
 
-事实链：
+1. dp=1 ⇒ `use_sequence_parallel_moe=False` ⇒ MoE/MLP 的 TP/EP 集合通信是 element-wise 的，
+   要求每个 rank 持有**完全相同的全量行**（`vllm/config/parallel.py:711-726`；cp0 就是这条路）。
+2. 旧移植版把 zigzag 布局放在**模型边界**：`patch/worker/patch_deepseek_v2.py` 在进层循环前把
+   hidden_states/positions 切成 rank-local `[prev,next]` 块，出口才 gather 回自然序；层中间没有任何 gather。
+3. 为 zigzag 写的行并行/共享专家归约适配只安装在 SP 或 fine-grained mlp-tp 路径里
+   （`ops/linear_op.py::MLPRowParallelOp`、`ops/fused_moe/shared_experts.py`），dp=1 从不触发
+   （远端 `summary.txt` 里 `path=fixed_order 0 / path=native 0` 就是直接证据）。
+4. ⇒ 层内至少 3 处 element-wise all_reduce 会把不同 token 的行加在一起：dense MLP `down_proj`、
+   MoE 出口（`_maybe_reduce_final_output`）、每层共享专家。
 
-1. 属性为 False（dp=1）时，vLLM 的 MoE 走 no-DP-EP：没有 dispatch/combine，每 rank 用自己的专家对**输入的所有行**
-   算 partial，最后由 moe_runner._maybe_reduce_final_output 做一次 all_reduce（条件 tp>1 or ep>1）。
-   这套只有当输入是**全量（replicated）行**时才正确。
-2. zigzag 的布局恰恰相反：模型边界 patch_deepseek_v2.py 在进入层循环前把 hidden_states 切成 rank-local 的
-   [prev,next] 块，出口才 all_gather + 反排列。也就是说层循环里的 MLP/MoE 看到的是**切片行**。
-3. 移植版为 zigzag 写的 MoE/MLP 适配只存在于 SP 路径里：ops/linear_op.py:192 的 MLPRowParallelOp
-   （fine-grained mlp tp）与 ops/fused_moe/shared_experts.py:246（注释写明 “SP-only path”）。
-   dp=1 下这些都不生效（MLPRowParallelOp 只在 mlp_tp/SP 配置里被替换，shared_experts 的 parallel_mode 不是
-   SEQUENCE_PARALLEL_ONLY）。
-4. 结论：连续切片路径没问题（attention 出口 _finalize_o_proj 在 o_proj.reduce_results=True 时 all_gather 回全量行，
-   MoE 拿到的是全量行）；但 **zigzag 下 MoE 会拿到切片行，而 MoE 侧要么走需要全量行的 no-DP-EP，要么走按整批
-   tensor_split 的 MC2（同样假设整批）** → 结果不对。这不是 4.1b 那处能覆盖的，属于布局层面的不匹配。
+远端实测（`log/acc_0922_222922`）：`cp_balance=1` 的 20 条长 prompt 全部首 token 为空
+（HTTP 200 + 50 个换行），短 prompt 20/20（低于 min_tokens 不进 zigzag）。
 
-三条出路（需要定）：
+**定案（2026-09-23）：不再让模型主流切换行布局。** zigzag 收回 attention 内部 ——
+模型主流（embedding / 模型边界 / dense MLP / MoE / shared experts / runner）保持全量、自然序、各 rank 相同，
+attention 用 `zigzag_index` 选本 rank 的 `[prev,next]` 行（替代连续切片），出口用
+`zigzag_gather_tensor` 把 rank 拼接序 all_gather + 反排列写回全量主流。
 
-- (a) dp=1 先不开 zigzag：加一条显式门（not use_sequence_parallel_moe → 资格门拒绝，reason=no_sp），
-  只验收连续切片 DSA-CP；代价是 cp_balance 在这批机器上暂时不可用，但不会算出错的数。
-- (b) 让 dp=1 也开 SP（上游 #47070 的 “SP without DP”，HEAD 里 forward_context 的 dp=1 兜底与 AgRs
-   [num_local]*world_size 短路都还在），模型侧 SP 分支一开，MoE 的 chunk/all_gather 与 reduce_scatter 就位，
-  zigzag 布局自洽；风险：上游因 DSv3.2+MTP 精度问题 (#47902/#48849) 把它挡回去了，且移植注释明说
-  “如果那道门放开，本文件要重新打层补丁”。
-- (c) 自己补 zigzag 的层内边界：在 MLP/MoE 前 all_gather、之后再切回 rank-local（每层两趟通信），
-  或把 3 里的 row-parallel 路径在 zigzag 下强制生效；工作量大、需要远端逐层验证。
+代价与收益：
 
-建议顺序：先按 (a) 跑连续切片的验收（cp0 vs base 的 B 等价性 + 噪声地板），把“DSA-CP 在 dp=1 成立”钉死；
-再用一次 cp1 起停确认 C 的行为（预期 FAIL，用来验证上面第 4 条的判断是否成立，日志里的 moe_comm_type 会直接告诉我们
-走的是哪条 MoE 路径）；之后在 (b)/(c) 之间选一条投入。
+- 收益不变：每个 rank 仍只算自己的 head/tail 块，causal attention 负载均衡；
+- 不变式恢复：模型主流的集合通信与 cp0 完全同构（B 与 C 按构造逐位一致），
+  owner-independent 归约（`fixed_order_reduce_scatter` / `REDUCE_MODE` / `EMBED_LOCAL`）整批删除；
+- 代价：dp=1 没有 SP、没有 MoE dispatch，MoE/MLP 每 rank 仍算全量行（与 cp0 相同），
+  zigzag 不减少 MoE 计算量 —— 这是 dp=1 下唯一正确的做法。
+
+代码改动清单、根因推理、精度测试方法与远端复跑命令见 `docs/dp1_zigzag_acc_fix.md`。
+
+## 9. 2026-09-23 的静态门控与 harness 同步
+
+- `accuracy/check_b_path.py` 按新架构重写断言（9 项）：模型主流文件 zigzag-free、
+  模型级 shard / 固定序归约原语不得残留、选行与放回都在 DSA-CP attention 内、
+  放回用的是**本层** `inv_gather_index`（不再有全局 `zigzag_active()`/`_EXTRA_CTX.zigzag_cp_*`）、
+  `zigzag_index` 只能由 DSA-CP 元数据发布、裸开关只许出现在 `envs.py` 与资格门、
+  `q_up_proj` 与 base 逐字节相同。本地实跑 `RESULT: PASS`（`smoke/s07_static_b_path`）。
+- `perf/check_cp_balance_fields.py` 不受影响：`ZigzagPlan fields=13`，`smoke/s06_static_fields` PASS。
+- vllm-ascend 侧 `tests/ut/attention/test_sfa_{cp,o_proj_weight_switch,v1}.py` 跟着
+  `_finalize_o_proj` 的新签名（第 4 个参数 = 本层 `inv_gather_index`）更新；本地无 torch_npu，未跑。
+- `reduce_mode` 从 `serve_config.py` / `configs/_base.json` 删除，3 个 `prof_*_cp1_a2a.json` 删除，
+  `tests/lib/roles.tsv` 的 `prof_a2a` 改为 `-`（自动 SKIP），`planlog.py`/`run_matrix.py` 不再统计 reduce 行。
+- 本地 `smoke/s02_config_resolve,s06,s07` 全 PASS（`tests/_out/0923_100117`）。

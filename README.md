@@ -45,7 +45,7 @@ bash run.sh glm52_a5_cur_cp0 --dry-run --print-env   # 只打印命令与环境
 | `model` / `served_model_name` | 权重路径 / 对外模型名 |
 | `host` / `port` / `local_ip` / `nic_name` | 监听地址、端口、HCCL 网卡与 IP |
 | `devices` / `tp_size` | 可见卡 / TP 并行度 |
-| `cp_balance` / `min_tokens` / `reduce_mode` / `debug` | cp_balance 四个开关 |
+| `cp_balance` / `min_tokens` / `debug` | cp_balance 三个开关（zigzag 总开关 / 触发下限 / 分支与计划日志） |
 | `deterministic` | 打开 4 个确定性环境变量（LCCL/HCCL/ATB 两项） |
 | `additional_config` / `server_args` / `env` | 其余 serve 参数与环境变量 |
 | `vllm_bin` | 启动命令，默认 `vllm`；可写 `[python3, -m, vllm.entrypoints.cli.main]` |
@@ -144,13 +144,12 @@ python accuracy/compare_first_token.py collect --url http://127.0.0.1:8035 --kin
 失败时把对应 kind 的两个 JSON 和带 `VLLM_ASCEND_CP_BALANCE_DEBUG=1` 的 server log
 一起回传。
 
-## 归约模式
+## zigzag 改法（2026-09-23）
 
-`VLLM_ASCEND_CP_BALANCE_REDUCE_MODE`：
-
-- `allreduce`（默认）：AllReduce 后切本 rank chunk，owner-independent；
-- `alltoall`：all_to_all_single + 固定 source-rank 求和，通信量更低；
-- `reducescatter`：恢复原始 reduce_scatter，仅用于基线对照。
+zigzag 只改 attention 内部"哪些行归本 rank 算"：模型主流（embedding / 模型边界 / MLP / MoE）
+在全 rank 上是同一份全量行，attention 用 `zigzag_index` 选行、出口用 `zigzag_gather_tensor` 排回自然序。
+因此 dp=1 下不会再有 owner-independent 归约（`reduce_mode` 及其 A/B 已删除），
+`[CP_BALANCE][reduce]` 日志也随之消失。背景与复跑见 `docs/dp1_zigzag_acc_fix.md`。
 
 ## 分支证明（走 C 还是 B）
 
@@ -193,9 +192,9 @@ python accuracy/check_b_path.py --repo /opt/its/z30055003/vllm-ascend \
 # 判据：末行 [check] RESULT: PASS
 ```
 
-断言内容：两处 row-parallel 归约 + embedding/MoE finalize 归约都由
-`zigzag_active()` 门控；裸的 `VLLM_ASCEND_CP_BALANCE` 只被资格判定读取；
-`_q_proj_and_k_up_proj` 的融合算子块与 base 逐字节相同。
+断言内容：zigzag 的行布局只出现在 DSA-CP attention（模型主流文件 zigzag-free）；
+模型级 shard / 固定序归约原语不得残留；`zigzag_index` 只能由 DSA-CP 元数据发布；
+裸的 `VLLM_ASCEND_CP_BALANCE` 只被资格判定读取；`_q_proj_and_k_up_proj` 的融合算子块与 base 逐字节相同。
 
 ### 步骤 1：一条命令跑完四组实验（推荐）
 
@@ -235,11 +234,9 @@ python accuracy/compare_first_token.py compare --require-text cur_off.json base_
 判据：`first-token match: 40/40` + `text_head match: 40/40` + 末行
 `[compare] RESULT: PASS`（`--require-text` 把前 120 字符生成文本也变成硬判据）。
 
-日志判据（证明 B 走的是原集合通信）：
+日志判据（证明 B 没进 zigzag）：
 
 ```bash
-grep -c "\[CP_BALANCE\]\[reduce\] path=native" cur_off.log        # > 0
-grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" cur_off.log   # == 0
 grep -c "\[CP_BALANCE\]\[plan\]" cur_off.log                     # == 0
 grep -c "branch=CONTINUOUS" cur_off.log                            # > 0
 grep -m1 "\[cp_balance\] REPO=" cur_off.log                       # 确认代码树
@@ -250,8 +247,8 @@ grep -m1 "\[cp_balance\] REPO=" cur_off.log                       # 确认代码
 ```bash
 # 1) 两次服务到底加载了哪个代码树 / 开了什么
 grep -m1 "\[cp_balance\]" cur_off.log base_off.log
-# 2) 运行期用了哪种归约（CP=0 必须是 path=native，不能出现 path=fixed_order）
-grep -c "\[CP_BALANCE\]\[reduce\] path=fixed_order" cur_off.log
+# 2) CP=0 不应出现任何 zigzag 计划
+grep -c "\[CP_BALANCE\]\[plan\]" cur_off.log
 # 3) 两份 JSON 是不是本轮采集的
 python -c "import json;[print(f, json.load(open(f))[\"url\"], json.load(open(f))[\"created_at\"]) for f in (\"cur_off.json\", \"base_off.json\")]"
 ```
@@ -259,7 +256,7 @@ python -c "import json;[print(f, json.load(open(f))[\"url\"], json.load(open(f))
 判读：
 
 - 两行的 `REPO=`/`HEAD=` 相同（或 base 那次仍是当前分支 HEAD）→ 代码树没切换，结果无效；
-- `path=fixed_order` 出现在 `cur_off.log` → 跑的是改动前的代码（或误设了 `REDUCE_MODE`）；
+- 服务日志里出现 `[CP_BALANCE][plan]` 但 `cur_off.log` 是 `cp_balance=0` 的配置 → 配置没生效；
 - 两份 JSON 的 `created_at` 相差很远 → 用的是旧数据；
 - 以上都正常而短 prompt（<2048 token，不进入 zigzag）仍不一致 → 说明还有未识别的差异，
   先跑一次"同代码树自比对"（base vs base，或 CP=0 跑两遍）确定测量是否可复现。
@@ -271,7 +268,7 @@ C 的数值随之改变，原验收要重跑：
 
 ```bash
 python accuracy/compare_first_token.py compare cp_on.json cur_off.json
-# C 日志应同时有 [CP_BALANCE][plan] 与 [CP_BALANCE][reduce] path=fixed_order
+# C 日志应出现 [CP_BALANCE][branch] branch=ZIGZAG 与 [CP_BALANCE][plan]
 ```
 
 ## profiling：对比 cp_balance 开关下的 forward
@@ -285,15 +282,14 @@ profiler 侧带 delay_iterations=0 / max_iterations=1。采完再按同一串长
 
 ```bash
 cd /opt/its/z30055003/cp_balance
-python3 perf/profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
+python3 perf/profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_base_cp0
 ```
 
-| 配置 | 代码树 | CP_BALANCE | REDUCE_MODE | 作用 |
-| --- | --- | --- | --- | --- |
-| `prof_cur_cp0` | 当前 | 0 | — | 与 base 等价的噪声基准 |
-| `prof_cur_cp1` | 当前 | 1 | allreduce | zigzag 现状（默认归约） |
-| `prof_cur_cp1_a2a` | 当前 | 1 | alltoall | zigzag + 低通信量归约 |
-| `prof_base_cp0` | base | 0 | — | 原版 DSA-CP 参照 |
+| 配置 | 代码树 | CP_BALANCE | 作用 |
+| --- | --- | --- | --- |
+| `prof_cur_cp0` | 当前 | 0 | 与 base 等价的噪声基准 |
+| `prof_cur_cp1` | 当前 | 1 | zigzag 现状 |
+| `prof_base_cp0` | base | 0 | 原版 DSA-CP 参照 |
 
 `profile_forward.py` 起服务 → 2 条 long prompt 热身（不采集）→ `POST /start_profile`
 → 4 条 long prompt（串行，每条一个 prefill batch）→ `POST /stop_profile` → 停服务，
@@ -308,9 +304,8 @@ python3 perf/profile_forward.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_
 采集完在远端解析（需要 torch_npu 与 CANN）：
 
 ```bash
-python3 perf/profile_analyse.py prof_cur_cp0 prof_cur_cp1 prof_cur_cp1_a2a prof_base_cp0
+python3 perf/profile_analyse.py prof_cur_cp0 prof_cur_cp1 prof_base_cp0
 python3 perf/profile_compare.py prof_cur_cp0 prof_cur_cp1
-python3 perf/profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 ```
 
 要回传的：每个 profiler 目录下的 `summary.json`、windows.json（窗口与长度的对应关系）、
@@ -320,8 +315,7 @@ python3 perf/profile_compare.py prof_cur_cp1 prof_cur_cp1_a2a
 判读先看 `profile_compare.py` 的第一张表：每个长度一行，`steps` 必须是 1（不是 1 会打
 WARNING），然后只看绝对量——attention 时间、集合通信时间、算子总时间、不采样的 clean_s，四个数随
 长度怎么走。不要发明比值去消漂移：上一轮同样代码路径的两个配置整体差 12%，这个噪声地板只能靠
-重复一轮来量，不能靠除掉一个所谓不受影响的算子——zigzag 会改变各 rank 持有的 token 集合，MoE 的
-路由分布跟着变，dispatch 时间本来就可能变。
+重复一轮来量，不能靠除掉一个所谓不受影响的算子。
 
 判读顺序与性能假设见 `docs/perf_plan.md`。
 
@@ -384,7 +378,7 @@ bash run.sh glm52_cur_cp0 --dry-run --print-env      # 期望 TP=16 NIC=eth2 IP=
 bash tests/run_tests.sh --from accuracy
 
 # 2. 性能：78 层四组（cp0 / cp1 / cp0_repeat / base_cp0）+ 解析 + 归因 + 打包
-bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a
+bash tests/run_tests.sh --only perf
 ```
 
 前置（两棵代码树都在同一台机器上）：
@@ -407,7 +401,7 @@ A5 用独立的一套配置（`configs/*_a5*.json`），差别、判据、回传
 
 ```bash
 bash tests/run_tests.sh --from accuracy                     # 精度：静态门控 + C 验收 + B 等价性 + 可选 A/B
-bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a   # 性能：cp0 / cp1 / cp0_repeat / base_cp0
+bash tests/run_tests.sh --only perf                                      # 性能：cp0 / cp1 / cp0_repeat / base_cp0
 ```
 
 A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.133.112、
@@ -417,8 +411,7 @@ A5 与 A3 的差异集中在 `configs/_common_a5.json`（TP=8、eth0、141.61.13
 `export CP_BALANCE_LOCAL_IP=141.61.133.104 CP_BALANCE_NIC_NAME=eth2`；命令行 `--set` 优先于环境变量。
 
 目标机 `.104` 的完整命令清单（机器族判定、冒烟、精度/性能入口、打包回传）见工程机文档目录的
-`docs/a5_104_runbook.md`；`reduce_mode=allreduce` / `alltoall` 的对照是可选
-A/B（`prof_a5_cur_cp1_a2a`，端口 8086），默认流程不跑，说明见该文档 §4。
+`docs/a5_104_runbook.md`。
 
 两处需要按现场确认：base 代码树路径（默认 `/home/z30055003/vllm-ascend-base`）与
 `cp_balance` 仓库位置（脚本假定在当前目录运行）。
@@ -502,15 +495,16 @@ bash verify_a5.sh                 # 兼容老入口 = bash verify.sh --family a5
 
 只需 `CP_BALANCE_LOCAL_IP` / `CP_BALANCE_NIC_NAME`（可选 `CP_BALANCE_DEVICES` / `CP_BALANCE_REPO` /
 `CP_BALANCE_BASE_REPO` / `HX_READY_TRIES`）；`VLLM_USE_V2_MODEL_RUNNER=0` 在 `configs/_base.json` 里，
-`VLLM_ASCEND_CP_BALANCE*` 由配置的 cp_balance/min_tokens/reduce_mode/debug 字段导出。
+`VLLM_ASCEND_CP_BALANCE*` 由配置的 cp_balance/min_tokens/debug 字段导出。
 判据来自 `harness.json` 的 `verify.diagnose`：长 prompt 要出现 zigzag 证据（`branch=ZIGZAG` 或
 `[CP_BALANCE][plan]`），否则按已知失败表给出原因（例如 `Disabling DSA-CP`、`reason=dp>1`）；
 不通过时的证据包是 `verify_<family>_*.tar.gz`。
 
 dp=1 的现状（两个树都带本地修复）：`enable_dsa_cp` 只判模型有没有 indexer，所以 tp16/dp1 也能开 DSA-CP，
 日志是 `DSA-CP is enabled without sequence-parallel MoE`，不再是 `Disabling DSA-CP`。
-连续切片（cp_balance=0）逻辑自洽，可以直接验收；zigzag（cp_balance=1）还差层内 MoE 的布局处理
-（原因与三条出路见 `docs/scripts_review.md` §8），建议先跑 cp0 把「DSA-CP 在 dp=1 成立」钉死，再决定 zigzag 怎么修。
+2026-09-22 远端实测：B 等价性（cp0 vs base）40/40 PASS，C 验收（cp1 vs cp0）长 prompt 0/20
+（zigzag 把行布局搬到模型边界，破坏了 dp=1 的 element-wise 集合通信前提）；2026-09-23 已把 zigzag
+改成 attention 内部选行，模型主流恢复 replicated。根因、改法与复跑命令见 `docs/dp1_zigzag_acc_fix.md`。
 
 参照树（base）由 harness 对齐到 fork 的 `base-dp1` 分支（= main + 同一行门修），这样 B 等价性比较的是同一条 DSA-CP 路径；
 如果把它指回纯 `main`（改 `harness.json trees.base.ref`），B 对比就只能当作「开了 DSA-CP vs 没开」看。

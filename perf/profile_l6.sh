@@ -16,7 +16,7 @@ cd "$ROOT"
 if [ "$#" -gt 0 ]; then
   CONFIGS="$*"
 else
-  CONFIGS="prof_l6_cur_cp0 prof_l6_cur_cp1 prof_l6_cur_cp1_a2a prof_l6_base_cp0"
+  CONFIGS="prof_l6_cur_cp0 prof_l6_cur_cp1 prof_l6_base_cp0"
 fi
 
 set -x
@@ -29,7 +29,6 @@ set +x
 
 set -x
 python3 "$PERF/profile_compare.py" prof_l6_cur_cp0 prof_l6_cur_cp1     || true
-python3 "$PERF/profile_compare.py" prof_l6_cur_cp1 prof_l6_cur_cp1_a2a || true
 python3 "$PERF/profile_compare.py" prof_l6_cur_cp0 prof_l6_base_cp0    || true
 python3 "$PERF/profile_order.py" prof_l6_cur_cp1 --rank rank0 --trim   || true
 python3 "$PERF/profile_order.py" prof_l6_cur_cp1 --rank rank0 --devices || true

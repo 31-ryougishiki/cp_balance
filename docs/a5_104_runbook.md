@@ -1,5 +1,7 @@
 # 141.61.133.104（A5 节点）精度 + 性能测试命令
 
+> 2026-09-23：zigzag 改为 attention 内部选行（模型主流恢复 replicated），本文中“模型边界切行/固定序归约”的描述已过时，见 `docs/dp1_zigzag_acc_fix.md`。
+
 对象：远程 A5 节点 `141.61.133.104`（机器族先用 §0 的探针判定）。
 本文件 = 现场命令清单；差异背景与判据来源见 `docs/a5_test_plan.md`、`docs/cp_balance_remote_checklist.md`。
 算子/字段一律写原名，见 §7 对照表。
@@ -57,7 +59,7 @@ cd /opt/its/z30055003/cp_balance
 export CP_BALANCE_FAMILY=a3 CP_BALANCE_LOCAL_IP=7.246.78.75 CP_BALANCE_NIC_NAME=eth2
 bash verify.sh --family a3                                                # 一键（含冒烟与诊断）
 bash tests/run_tests.sh --from accuracy                                   # §2 精度
-bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a      # §3 性能
+bash tests/run_tests.sh --only perf                                       # §3 性能
 ```
 
 ---
@@ -82,7 +84,7 @@ bash run.sh glm52_a5_cur_cp1 --dry-run --print-env | head -8
 ```
 
 要看到 `[cp_balance] CONFIG=... REPO=/home/z30055003/vllm-ascend HEAD=... MODEL=... TP=8 NIC=eth2
-IP=141.61.133.104 DEVICES=0,...,7 CP_BALANCE=1 MIN_TOKENS=2048 REDUCE_MODE=allreduce DEBUG=1
+IP=141.61.133.104 DEVICES=0,...,7 CP_BALANCE=1 MIN_TOKENS=2048 DEBUG=1
 DET=True LAYERS=all PROFILER=off PRELUDE=True SPEC=deepseek_mtp/1`，且 argv 以
 `bash -c 'source /mnt/share/.../set_env.bash && ... exec vllm serve ...'` 开头。
 
@@ -180,8 +182,7 @@ df -h .
 
 bash tests/run_tests.sh --list | grep p10_capture                       # 看变体
 bash tests/run_tests.sh --only perf/p10_capture#prof_cp0,perf/p10_capture#prof_cp1   # 先快跑两组：证明采得到
-bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a     # 四组：cp0 / cp1 / cp0_repeat / base_cp0
-bash tests/run_tests.sh --only perf                                       # 含 §4 归约 A/B（多一组 prof_a2a）
+bash tests/run_tests.sh --only perf                                       # 四组：cp0 / cp1 / cp0_repeat / base_cp0
 ```
 
 采集口径：每个配置一次服务起停（10 分钟级），组内按 `lengths=[1024, 2048, 4096, 6144, 8192, 12288]`
@@ -211,10 +212,9 @@ python3 perf/collect.py --prune-traces
 
 1. **噪声地板**：`prof_a5_cur_cp0` vs `prof_a5_cur_cp0_repeat` 的差值就是本轮噪声；
    要下的结论小于噪声时不下结论（A3 那轮轮间漂移 5%~13%）。
-2. **先核次数再谈时间**：看 `op_statistic.csv` 的 `OP Type` 计数。非 zigzag 一侧只有
-   `reduce_scatterAicpuKernel`；zigzag 一侧应恰好少 N 次 `reduce_scatterAicpuKernel`、
-   多 N 次 `allreduceAicpuKernel`（`reduce_mode=alltoall` 时是 `alltoallAicpuKernel`），
-   N = 4 × 窗口内 prefill 步数（3 个 dense 层 `down_proj` + embedding）。次数对不上说明配置没生效。
+2. **先核次数再谈时间**：看 `op_statistic.csv` 的 `OP Type` 计数。zigzag 只改 attention
+   内部的选行/放回，不再改模型主流的归约；cp1 / cp0 两侧的集合通信构成应一致，
+   差得多说明配置没生效。
 3. **窗口必须是单步**（判据 `steps=1`）：当前 trace 的 `kernel_details.csv` 没有 Step 列，`kernel_steps` 恒 None，
    所以 `perf/p21_window_single_step` 恒 SKIP —— 这一条现在判不了（`scripts_review.md` §3 待定）。
 4. **端到端数字看 `clean_s`**（关 profiler 的同请求），`profiled_s` 只说明 profiling 自身开销。
@@ -223,66 +223,7 @@ python3 perf/collect.py --prune-traces
 
 ## 4. 归约 A/B
 
-### 4.1 是什么
-
-把 cp_balance 的跨 rank 归约实现换成另一种等价写法（同一正确性目标），只比"对不对 + 快不快"。
-开关是 `VLLM_ASCEND_CP_BALANCE_REDUCE_MODE`，配置字段是 `reduce_mode`；
-进程内由 `reduce_mode()` 的 `lru_cache` 读一次，**A/B 必须各起一次服务**。
-
-对应配置：`prof_a5_cur_cp1`（端口 8085，`allreduce`，默认）vs
-`prof_a5_cur_cp1_a2a`（端口 8086，`alltoall`），两者只差这一个字段。
-
-### 4.2 为什么需要它
-
-zigzag 均衡会把 token 行在 CP=TP 的各 rank 之间重新分配：每个 rank 拿到的行不再等于它自己请求的那段。
-row-parallel 层的输出必须跨 rank 求和后切成 1/cp 段交给该段的 owner，而 `dist.reduce_scatter_tensor`
-（HCCL 的 `reduce_scatterAicpuKernel`）的累加/舍入顺序依赖 chunk 的接收者。于是同一批 per-token
-部分和，在 B（`CP_BALANCE=0`）与 C（`=1`）里可能舍入出不同的 bf16 值。
-
-所以 zigzag 生效时改走 `fixed_order_reduce_scatter`：求和顺序只由 token 身份决定，与 owner 无关。
-挂载点（都在 `zigzag_active()` 之后，非 zigzag 时逐字节走 base）：
-`ops/linear_op.py` 的 `MLPRowParallelOp`（MLP，日志 `path=native site=mlp`）、`ops/linear_op.py` 的 o_proj/down_proj 分支、
-`ops/fused_moe/shared_experts.py` 的共享专家出口（行号会随重构漂，按类名/函数名找）。
-（sequence，日志 `path=native site=sequence`）、`ops/register_custom_ops.py:41`。
-
-### 4.3 三种模式
-
-| `reduce_mode` | 实现 | 用途 |
-| --- | --- | --- |
-| `allreduce`（默认） | `_allreduce_slice_reduce_scatter`：整张量 `dist.all_reduce`，再切本地 chunk | 当前正确性目标；HCCL 上最稳 |
-| `alltoall` | `_all_to_all_fixed_order_reduce_scatter`：`dist.all_to_all_single` 交换 chunk，再按 source rank `0..N-1` 顺序 `fixed_order_rank_sum` | 通信量更低，但用的是较不常见的集合通信，每个 SoC 都要另验 —— A/B 的另一臂 |
-| `reducescatter` | `_plain_reduce_scatter`：原生 `dist.reduce_scatter_tensor`，与 base 等价 | 调试用：复现"改之前"的基线 |
-
-### 4.4 怎么跑、看什么
-
-```bash
-bash tests/run_tests.sh --only perf/p10_capture#prof_cp1,perf/p10_capture#prof_a2a
-bash tests/run_tests.sh --only perf/p20_analyse,perf/p21_window_single_step,perf/p22_report_compare,perf/p23_report_order,perf/p24_collect
-```
-
-判据同 §3 的四条，其中"次数"的期望值按模式换：`allreduce` 臂应看到 `allreduceAicpuKernel` 增加 N 次，
-`alltoall` 臂应看到 `alltoallAicpuKernel` 增加 N 次、`allreduceAicpuKernel` 为 0。
-
-### 4.5 上一轮实测（A3，rank0 窗口）
-
-来自 `data/send/export/*op_statistic.csv`，算子名即 `OP Type` 原名：
-
-| 配置 | `reduce_scatterAicpuKernel` | `allreduceAicpuKernel` | 备注 |
-| --- | --- | --- | --- |
-| `cur_cp0` | 4936 次 / 10.13 s | 0 | 与 `base_cp0` 条数完全相同 |
-| `cur_cp1` | 4920 次（−16）/ 11.47 s | 16 次 / 12.2 ms | 同一条 `reduce_scatterAicpuKernel` 自身慢 13% |
-| `cur_cp1_a2a` | 4920 次（−16）/ 10.83 s | `alltoallAicpuKernel` +16 | |
-
-口径：16 次归约在窗口里只值 12 ms（0.018%），而同一算子跨轮波动 13% —— 轮间漂移比效应大两个数量级，
-所以 `alltoall` 只作可选 A/B 保留，**不要据此改默认值**。要下结论就每臂至少 2 轮，且只比同一轮内的差值。
-
-### 4.6 别和另外两个 A/B 混
-
-| 名字 | 变量 | 测什么 |
-| --- | --- | --- |
-| cp0 vs cp1 | `CP_BALANCE=0/1` | zigzag 均衡本身的功能收益（性能主对比） |
-| 归约 A/B | `reduce_mode=allreduce/alltoall` | 归约实现的通信代价（都在 `CP_BALANCE=1` 下） |
-| 精度步骤 3 的 A/B | 临时补丁 | KV 写过滤 `slot < 0` 的**正确性**，与性能无关 |
+（2026-09-23 起 `reduce_mode` 及其 A/B 已随 zigzag 改法删除，见 `docs/dp1_zigzag_acc_fix.md`。）
 
 ---
 
@@ -326,9 +267,7 @@ scp <user>@141.61.133.104:/home/z30055003/cp_balance/a5_104_*.tgz /d/code/cp_bal
 | --- | --- |
 | 集合通信算子（`op_statistic.csv` 的 `OP Type`） | `reduce_scatterAicpuKernel`、`allreduceAicpuKernel`、`alltoallAicpuKernel`、`allgatherAicpuKernel`、`alltoallvAicpuKernel` |
 | 代码里的集合通信调用 | `dist.reduce_scatter_tensor`、`dist.all_reduce`、`dist.all_to_all_single`、`all_gather_into_tensor` |
-| cp_balance 归约实现 | `fixed_order_reduce_scatter`、`_allreduce_slice_reduce_scatter`、`_all_to_all_fixed_order_reduce_scatter`、`_plain_reduce_scatter`、`fixed_order_rank_sum`、`reduce_mode()` |
-| 归约挂载点 | `ops/linear_op.py`（`site=mlp` / `site=sequence`）、`ops/register_custom_ops.py`（`maybe_pad_and_reduce`） |
-| 环境变量 / 配置字段 | `VLLM_ASCEND_CP_BALANCE`、`VLLM_ASCEND_CP_BALANCE_MIN_TOKENS`、`VLLM_ASCEND_CP_BALANCE_REDUCE_MODE`、`VLLM_ASCEND_CP_BALANCE_DEBUG`；配置字段 `cp_balance` / `min_tokens` / `reduce_mode` / `debug` |
-| 服务日志行 | `[cp_balance] CONFIG=...`（指纹）、`[CP_BALANCE][branch]`、`[CP_BALANCE][plan]`、`[CP_BALANCE][reduce]`（`[CP_BALANCE][group]` 只在当年那个临时补丁里，当前树没有） |
+| 环境变量 / 配置字段 | `VLLM_ASCEND_CP_BALANCE`、`VLLM_ASCEND_CP_BALANCE_MIN_TOKENS`、`VLLM_ASCEND_CP_BALANCE_DEBUG`；配置字段 `cp_balance` / `min_tokens` / `debug` |
+| 服务日志行 | `[cp_balance] CONFIG=...`（指纹）、`[CP_BALANCE][branch]`、`[CP_BALANCE][plan]`（`[CP_BALANCE][group]` 只在当年那个临时补丁里，当前树没有） |
 | profiler 产物 | `op_statistic.csv`、`api_statistic.csv`、`kernel_details.csv`、`step_trace_time.csv`（列 `Computing` / `Communication(Not Overlapped)` / `Overlapped` / `Free` / `Bubble`）、`trace_view.json` |
 | harness 产物 | `summary.json`、`windows.json`、`order_rank0.json`、`export/`、`clean_s`、`profiled_s`、`collect_<时间戳>/` |

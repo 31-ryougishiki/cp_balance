@@ -313,7 +313,7 @@ cat <<EOF
 下一步：
   1) 诊断没通过先看它的 VERDICT：KNOWN 行会直接指出是哪个门（例如 Disabling DSA-CP）；
   2) zigzag 证据出现后：bash tests/run_tests.sh --only accuracy/a10_matrix_gate --keep-going
-  3) 性能：bash tests/run_tests.sh --only perf/p10_capture --skip perf/p10_capture#prof_a2a
+  3) 性能：bash tests/run_tests.sh --only perf/p10_capture
   4) 把 ${PREFIX}_${FAMILY}_*.tar.gz 回传（原始 trace 不用拷）
 EOF
 

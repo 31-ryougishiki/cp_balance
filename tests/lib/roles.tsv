@@ -11,7 +11,7 @@ a3	prof	prof_cp0	prof_cur_cp0
 a3	prof	prof_cp1	prof_cur_cp1
 a3	prof	prof_cp0_repeat	prof_cur_cp0_repeat
 a3	prof	prof_base	prof_base_cp0
-a3	prof	prof_a2a	prof_cur_cp1_a2a
+a3	prof	prof_a2a	-
 a5	svc	svc_cp0	glm52_a5_cur_cp0
 a5	svc	svc_cp1	glm52_a5_cur_cp1
 a5	svc	svc_load_cp0	svc_a5_load_cp0
@@ -23,4 +23,4 @@ a5	prof	prof_cp0	prof_a5_cur_cp0
 a5	prof	prof_cp1	prof_a5_cur_cp1
 a5	prof	prof_cp0_repeat	prof_a5_cur_cp0_repeat
 a5	prof	prof_base	prof_a5_base_cp0
-a5	prof	prof_a2a	prof_a5_cur_cp1_a2a
+a5	prof	prof_a2a	-

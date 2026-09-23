@@ -5,6 +5,9 @@
 > - 老入口（`round2_verify*.sh`、`perf/profile*.sh`、`run_matrix.sh`、`collect.sh`、`run_a5.sh`）随后已全部删除，`tests/` 已进版本库。
 > - `accuracy/a30_slot_filter_ab` 已定案不修锚点、永久 SKIP（`scripts_review.md` §7-4）。
 > - 测试脚本数 17（9 smoke + 3 accuracy + 5 perf）；p10 只判 `windows.json` 有窗口，`rank_count>0` 是 p20 的 `usable` 判据。
+> - 2026-09-23：zigzag 改为 attention 内部选行（模型主流恢复 replicated）：`[CP_BALANCE][reduce]`
+>   行与归约路径统计已删除（`planlog.py` / `run_matrix.py` 不再跟踪），perf 的归约 A/B 变体与其配置也已删除；
+>   `check_b_path.py` 的静态门控改成按新架构断言（项数随之变化，见 `docs/dp1_zigzag_acc_fix.md`）。
 
 # tests/ 分阶段复查（测试树重构 + 统一入口）
 

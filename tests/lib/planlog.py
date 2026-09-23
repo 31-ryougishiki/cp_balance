@@ -45,16 +45,12 @@ BRANCH_RE = re.compile(
     re.escape("[CP_BALANCE][branch] rank=") + NUM + " branch=([A-Za-z_]+)" +
     " reason=([^ ]+?)(?: site=([A-Za-z_]+))?" + "$"
 )
-REDUCE_RE = re.compile(re.escape("[CP_BALANCE][reduce] path=") + "([A-Za-z_]+)")
-
-
 def _ints(raw: str) -> list:
     return [int(part) for part in raw.split(",") if part.strip()]
 
 
 def _scan(log: Path) -> dict:
     branch = {}
-    reduce_paths = {}
     lines = []
     with log.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -75,10 +71,7 @@ def _scan(log: Path) -> dict:
                 key = (hit.group(2), hit.group(3), hit.group(4) or "-")
                 branch[key] = branch.get(key, 0) + 1
                 continue
-            hit = REDUCE_RE.search(line)
-            if hit:
-                reduce_paths[hit.group(1)] = reduce_paths.get(hit.group(1), 0) + 1
-    return {"lines": lines, "branch": branch, "reduce": reduce_paths}
+    return {"lines": lines, "branch": branch}
 
 
 def _groups(lines: list) -> list:
@@ -195,8 +188,6 @@ def _print_report(log: Path, data: dict, analysis: dict, result: str) -> None:
           % (summary["zigzag_tokens"], summary["padding_tokens"], summary["tail_group_ranks"]))
     for key in sorted(data["branch"]):
         print("[planlog] branch=%s reason=%s site=%s lines=%d" % (key[0], key[1], key[2], data["branch"][key]))
-    for name in sorted(data["reduce"]):
-        print("[planlog] reduce path=%s lines=%d" % (name, data["reduce"][name]))
     for check in analysis["checks"]:
         print("[planlog] %-24s %s (%s)" % (check["name"], "ok" if check["ok"] else "FAIL", check["detail"]))
     for check in analysis["coverage"]:
@@ -241,8 +232,7 @@ def main(argv: list) -> int:
     if args.json:
         payload = {"log": str(log), "cp_size": args.cp_size, "result": result,
                    "summary": summary, "checks": analysis["checks"], "coverage": analysis["coverage"],
-                   "branch": {"%s|%s|%s" % key: count for key, count in data["branch"].items()},
-                   "reduce": data["reduce"]}
+                   "branch": {"%s|%s|%s" % key: count for key, count in data["branch"].items()}}
         Path(args.json).write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print("[planlog] json -> %s" % args.json)
     return {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 77}[result]

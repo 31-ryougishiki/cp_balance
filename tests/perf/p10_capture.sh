@@ -2,7 +2,7 @@
 # desc:     单组 profiling 采集
 # needs:    profiler
 # tags:     npu, slow, perf
-# variants: prof_cp0 prof_cp1 prof_cp0_repeat prof_base prof_a2a
+# variants: prof_cp0 prof_cp1 prof_cp0_repeat prof_base
 # est:      40min
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"

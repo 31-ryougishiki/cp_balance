@@ -61,9 +61,10 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
 三种结果怎么读：
 
 - **PASS**：zigzag 与连续切片数值等价，可以进性能阶段；
-- **FAIL 且 cp1 有 zigzag 证据**：当前最可能是已知的 zigzag MoE 布局问题（`scripts_review.md` §8：层内 SP 关闭时 MoE 需要全量行，
-  而 zigzag 给的是切片行）。回传：`[CP_BALANCE][plan]` 前后 50 行、诊断报告里的 `moe_comm_type/MC2` 行、`cmp_c_vs_b.txt`，
-  再决定三条出路（(a) dp=1 显式不开 zigzag /(b) dp=1 也开 SP /(c) 自己补层内 gather）；
+- **FAIL 且 cp1 有 zigzag 证据**：先看长 prompt 的失败签名（`source=empty` / 一堆换行 = logits 坏了，不是 HTTP 问题）。
+  2026-09-22 那一轮就是已知的"模型级行布局"问题，2026-09-23 已按 `docs/dp1_zigzag_acc_fix.md` 改成 attention 内部选行；
+  重跑后若长 prompt 仍然全错，回传 `[CP_BALANCE][plan]` 前后 50 行、`cmp_c_vs_b.txt`、
+  服务日志里的 `moe_comm_type`（要 `--log-level debug`）与本轮树 HEAD；
 - **FAIL 且 cp1 没有证据**：门/配置没生效（回到阶段 0 的诊断）。
 
 顺带：MTP 的 draft 步会打 `branch=CONTINUOUS reason=draft`，出现它是正常的（显式守卫）。

@@ -57,7 +57,7 @@ SERVE_DEFAULTS = {
 }
 KNOWN_KEYS = {
     "name", "extends", "repo", "repo_tree", "model", "served_model_name", "host", "port", "devices",
-    "local_ip", "nic_name", "tp_size", "cp_balance", "min_tokens", "reduce_mode", "debug",
+    "local_ip", "nic_name", "tp_size", "cp_balance", "min_tokens", "debug",
     "deterministic", "deterministic_env", "additional_config", "hf_overrides",
     "speculative_config", "server_args", "env", "prelude", "profiler", "lengths",
     "pythonunbuffered", "vllm_bin",
@@ -265,8 +265,6 @@ def build_env(cfg: dict, managed: dict | None = None) -> dict:
         put("VLLM_ASCEND_CP_BALANCE", str(int(cfg["cp_balance"])))
     if cfg.get("min_tokens") is not None:
         put("VLLM_ASCEND_CP_BALANCE_MIN_TOKENS", str(int(cfg["min_tokens"])))
-    if cfg.get("reduce_mode"):
-        put("VLLM_ASCEND_CP_BALANCE_REDUCE_MODE", str(cfg["reduce_mode"]))
     if cfg.get("debug") is not None:
         put("VLLM_ASCEND_CP_BALANCE_DEBUG", str(int(cfg["debug"])))
     if cfg.get("deterministic"):
@@ -402,7 +400,6 @@ def config_digest(cfg: dict) -> str:
 ENV_FROM_FIELD = (
     ("VLLM_ASCEND_CP_BALANCE", "cp_balance"),
     ("VLLM_ASCEND_CP_BALANCE_MIN_TOKENS", "min_tokens"),
-    ("VLLM_ASCEND_CP_BALANCE_REDUCE_MODE", "reduce_mode"),
     ("VLLM_ASCEND_CP_BALANCE_DEBUG", "debug"),
     ("ASCEND_RT_VISIBLE_DEVICES", "devices"),
     ("HCCL_IF_IP", "local_ip"),
@@ -422,7 +419,7 @@ def env_field_conflicts(cfg: dict) -> list:
 def fingerprint(cfg: dict, env: dict) -> str:
     return (
         "[cp_balance] CONFIG=%s REPO=%s HEAD=%s MODEL=%s PORT=%s TP=%s NIC=%s IP=%s DEVICES=%s "
-        "CP_BALANCE=%s MIN_TOKENS=%s REDUCE_MODE=%s DEBUG=%s DET=%s LAYERS=%s PROFILER=%s "
+        "CP_BALANCE=%s MIN_TOKENS=%s DEBUG=%s DET=%s LAYERS=%s PROFILER=%s "
         "PRELUDE=%s SPEC=%s ARGS=%s"
         % (
             cfg.get("name"),
@@ -436,7 +433,6 @@ def fingerprint(cfg: dict, env: dict) -> str:
             cfg.get("devices"),
             env.get("VLLM_ASCEND_CP_BALANCE"),
             env.get("VLLM_ASCEND_CP_BALANCE_MIN_TOKENS"),
-            env.get("VLLM_ASCEND_CP_BALANCE_REDUCE_MODE"),
             env.get("VLLM_ASCEND_CP_BALANCE_DEBUG"),
             bool(cfg.get("deterministic")),
             layer_override(cfg),

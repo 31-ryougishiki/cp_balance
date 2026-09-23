@@ -4,7 +4,7 @@
 对象：A5 机器（8 卡）。一条测试 = `configs/` 下一条 JSON，harness 级参数（树/超时/验证步骤）在根目录 `harness.json`。
 配套：`docs/remote_run.md`（远端怎么跑）、`docs/scripts_review.md`（当前状态与未决问题）。
 
-> 现场命令清单（`141.61.133.104` 的 IP/网卡覆盖、冒烟、回传打包、归约 A/B）见
+> 现场命令清单（`141.61.133.104` 的 IP/网卡覆盖、冒烟、回传打包）见
 > `docs/a5_104_runbook.md`；本文件保留 A5/A3 差异、判据来源与回传口径。
 
 ## 1. A5 与 A3 的差别（决定"不能沿用 A3 结论"）
@@ -115,28 +115,26 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate#nomtp_matrix     # 原 r
 ## 4. 性能：一条命令
 
 ```bash
-bash tests/run_tests.sh --only perf --skip perf/p10_capture#prof_a2a   # 四组：prof_cp0 / prof_cp1 / prof_cp0_repeat / prof_base
+bash tests/run_tests.sh --only perf   # 四组：prof_cp0 / prof_cp1 / prof_cp0_repeat / prof_base
 bash tests/run_tests.sh --only perf/p10_capture#prof_cp1               # 只跑一组（变体名是角色名）
 ```
 
 四组配置（A5 专用，端口 8084~8088，profiling 组不带 MTP）：
 
-| 配置 | 代码树 | `cp_balance` | `reduce_mode` | 作用 |
-| --- | --- | --- | --- | --- |
-| `prof_a5_cur_cp0` | 当前 | 0 | — | 与 base 等价的性能基准 |
-| `prof_a5_cur_cp1` | 当前 | 1 | `allreduce` | zigzag 现状 |
-| `prof_a5_cur_cp0_repeat` | 当前 | 0 | — | **噪声地板**（同代码路径再跑一遍） |
-| `prof_a5_base_cp0` | base | 0 | — | 原版 DSA-CP 参照 |
-| `prof_a5_cur_cp1_a2a` | 当前 | 1 | `alltoall` | 可选的低通信量归约 A/B（说明见 `docs/a5_104_runbook.md` §4） |
+| 配置 | 代码树 | `cp_balance` | 作用 |
+| --- | --- | --- | --- |
+| `prof_a5_cur_cp0` | 当前 | 0 | 与 base 等价的性能基准 |
+| `prof_a5_cur_cp1` | 当前 | 1 | zigzag 现状 |
+| `prof_a5_cur_cp0_repeat` | 当前 | 0 | **噪声地板**（同代码路径再跑一遍） |
+| `prof_a5_base_cp0` | base | 0 | 原版 DSA-CP 参照 |
 
 判读口径（A3 那一轮踩过的坑，A5 直接沿用）：
 
 1. **先看噪声地板**：`profile_compare.py prof_a5_cur_cp0 prof_a5_cur_cp0_repeat` 的差值就是本轮噪声；
    两次差异小于噪声时不要下结论。A3 那轮的轮间漂移是 5%~13%。
-2. **先核对次数再谈时间**：看 `op_statistic.csv` 的 `OP Type` 计数 —— 非 zigzag 一侧只有
-   `reduce_scatterAicpuKernel`；zigzag 一侧应恰好少 N 次 `reduce_scatterAicpuKernel`、多 N 次
-   `allreduceAicpuKernel`（`reduce_mode=alltoall` 时是 `alltoallAicpuKernel`），
-   N = 4 × 窗口内 prefill 步数（3 个 dense 层 `down_proj` + embedding）；次数不对说明配置没生效。
+2. **先核对次数再谈时间**：看 `op_statistic.csv` 的 `OP Type` 计数 —— zigzag 只改 attention
+   内部的选行/放回，不再改模型主流的归约；cp1 / cp0 两侧的集合通信构成应一致，
+   差得多说明配置没生效。
 3. ~~每个长度的窗口 `steps` 必须是 1~~：当前 trace 的 `kernel_details.csv` 没有 Step 列，`kernel_steps` 恒 None，
    `perf/p21_window_single_step` 恒 SKIP —— 这条现在判不了（`scripts_review.md` §3 待定）。
 4. `trace_view.json` 很大时用 `--trim`（只回传 `order_rank0.json`）。

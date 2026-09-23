@@ -1,8 +1,0 @@
-{
-  "extends": "_profile_l6_common.json",
-  "name": "prof_l6_cur_cp1_a2a",
-  "port": 8037,
-  "cp_balance": 1,
-  "profiler": {},
-  "reduce_mode": "alltoall"
-}

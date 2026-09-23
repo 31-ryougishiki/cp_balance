@@ -4,44 +4,61 @@
     python3 check_b_path.py --repo /home/z30055003/vllm-ascend \
         --base-repo /home/z30055003/vllm-ascend-base
 
-只读源码，不需要 NPU、不 import 运行时。PASS 表示：非 zigzag 的 forward 静态上碰不到
-cp_balance 专有代码（逐位等价仍由远端 compare_first_token.py 验证）。
+只读源码，不需要 NPU、不 import 运行时。PASS 表示：zigzag 的行布局只存在于 DSA-CP
+attention 内部，模型主流（embedding / 模型边界 / dense MLP / MoE / runner）与无
+cp_balance 时逐位相同（逐位等价仍由远端 compare_first_token.py 验证）。
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import sys
 from pathlib import Path
 
 SWITCH = "VLLM_ASCEND_CP_BALANCE"
 SWITCH_ALLOWED = {"envs.py", "layers/cp_zigzag.py"}
-ZIGZAG_FUNCTION = "def zigzag_active() -> bool:"
-FIXED_ORDER_CALL = "fixed_order_reduce_scatter("
-FIXED_ORDER_GATED_FILES = ("ops/linear_op.py", "ops/fused_moe/shared_experts.py")
-GUARD = "if zigzag_active():"
+# 布局的唯一来源：每层的 DSA-CP 元数据（DSACPContext），不允许再有全局开关
+LAYOUT_SOURCES = ("dsa_cp_context", "zigzag_index", "inv_gather_index")
+GLOBAL_FLAGS = ("def zigzag_active()", "_EXTRA_CTX.zigzag_cp_active", "zigzag_cp_context =")
+# 模型主流：zigzag 不得出现在这些文件里（它们是 dp=1 下 element-wise 集合通信的宿主）
+MODEL_STREAM_FILES = (
+    "patch/worker/patch_deepseek_v2.py",
+    "ops/vocab_parallel_embedding.py",
+    "ops/linear_op.py",
+    "ops/fused_moe/shared_experts.py",
+    "worker/model_runner_v1.py",
+)
+# 模型级布局用的原语：随"attention 内部选行"的改法一起删除，残留即代表回到了错布局
+DEAD_PRIMITIVES = ("fixed_order_reduce_scatter", "zigzag_shard_tensor", "zigzag_reorder_moe_aux")
+ALLOWED_WRITERS = (
+    "attention/context_parallel/sfa_cp.py",
+    "attention/context_parallel/zigzag_cp.py",
+    "layers/cp_zigzag.py",
+    "ascend_forward_context.py",
+)
 
 
-def gated_call_sites(text: str, call: str, guard: str) -> list:
-    """Call sites of the call that are not inside a block opened by the guard."""
-    lines = text.splitlines()
-    guard_lines = [i for i, line in enumerate(lines) if line.strip() == guard]
-    problems: list = []
-    for index, line in enumerate(lines):
-        if call not in line or line.lstrip().startswith("#"):
-            continue
-        ok = False
-        for guard_index in reversed(guard_lines):
-            if guard_index >= index:
-                continue
-            between = lines[guard_index + 1 : index]
-            if any(bl.startswith(("def ", "class ")) for bl in between):
-                break
-            ok = True
-            break
-        if not ok:
-            problems.append("%d: %s is not guarded by %s" % (index + 1, call, guard))
-    return problems
+def zigzag_identifiers(text: str) -> list:
+    """Lines of zigzag-looking code identifiers (comments/docstrings excluded)."""
+    hits: list = []
+    for node in ast.walk(ast.parse(text)):
+        names: list = []
+        if isinstance(node, ast.Name):
+            names.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.append(node.attr)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append(node.name)
+        elif isinstance(node, ast.arg):
+            names.append(node.arg)
+        elif isinstance(node, ast.keyword) and node.arg:
+            names.append(node.arg)
+        elif isinstance(node, ast.alias):
+            names.extend([node.name, node.asname or ""])
+        if any("zigzag" in name.lower() for name in names):
+            hits.append(node.lineno)
+    return sorted(set(hits))
 
 
 def function_body(text: str, marker: str) -> str:
@@ -80,26 +97,48 @@ def main() -> int:
 
     ctx = src("ascend_forward_context.py")
 
-    # 1. 逐 forward 的门控开关只此一处
-    check(ctx.count(ZIGZAG_FUNCTION) == 1, "per-forward zigzag_active() helper exists exactly once")
+    # 1. 布局只能由元数据决定：不得再有全局 zigzag 开关/上下文代理字段
+    leftover = [name for name in GLOBAL_FLAGS if name in ctx]
+    check(not leftover, "no global zigzag flag survives (the per-layer plan is the layout)", leftover)
 
-    # 2. 所有 owner 无关归约都在 zigzag 门控内（连续切片路径逐位走原集合通信）
-    for rel in FIXED_ORDER_GATED_FILES:
-        text = src(rel)
-        problems = gated_call_sites(text, FIXED_ORDER_CALL, GUARD)
-        check(not problems, f"{rel}: every fixed-order reduce site is gated on zigzag_active()", problems)
+    # 2. zigzag 行布局只属于 DSA-CP attention：模型主流（embedding / 模型边界 / dense
+    #    MLP / MoE / runner）必须保持"全量 replicated"，任何一处置换行序都会破坏
+    #    dp=1 下 element-wise 的 TP/EP 集合通信（B 与 C 逐位一致性）。
+    leaks: list = []
+    for rel in MODEL_STREAM_FILES:
+        for line in zigzag_identifiers(src(rel)):
+            leaks.append("%s:%d" % (rel, line))
+    check(not leaks, "the replicated model stream (embedding/boundary/MLP/MoE/runner) is zigzag-free", leaks)
 
-    # 3. zigzag 只在 DSA-CP 元数据里落地：别处不得写 zigzag_index
-    writers: list = []
-    allowed_writers = (
-        "attention/context_parallel/sfa_cp.py",
-        "attention/context_parallel/zigzag_cp.py",
-        "layers/cp_zigzag.py",
-        "ascend_forward_context.py",
-    )
+    # 3. 模型级 shard / owner-independent 归约原语必须彻底消失（它们的替代品是
+    #    attention 内部的 zigzag_index 选行 + 出口 all_gather）
+    dead: list = []
     for path in sorted(pkg.rglob("*.py")):
         rel = path.relative_to(pkg).as_posix()
-        if rel in allowed_writers:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for name in DEAD_PRIMITIVES:
+            if name in text:
+                dead.append("%s: %s" % (rel, name))
+    check(not dead, "no model-level shard / owner-independent reduce primitive is left", dead)
+
+    # 4. 行布局的进入与离开都在 DSA-CP attention 内，且都取自本层元数据：
+    #    选行用 context.zigzag_index，出口用本层 inv_gather_index
+    sfa = src("attention/context_parallel/sfa_cp.py")
+    check(
+        "hidden_states[context.zigzag_index]" in sfa,
+        "DSA-CP attention selects its rank-local zigzag rows itself",
+    )
+    check("zigzag_gather_tensor(" in sfa, "DSA-CP attention restores the replicated stream at the o_proj exit")
+    check(
+        "zigzag_inv_gather_index=context.inv_gather_index" in sfa,
+        "the zigzag row restore is driven by this layer's own plan, not a global flag",
+    )
+
+    # 5. zigzag 只在 DSA-CP 元数据里落地：别处不得写 zigzag_index
+    writers: list = []
+    for path in sorted(pkg.rglob("*.py")):
+        rel = path.relative_to(pkg).as_posix()
+        if rel in ALLOWED_WRITERS:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for index, line in enumerate(text.splitlines(), start=1):
@@ -107,19 +146,7 @@ def main() -> int:
                 writers.append(f"{rel}:{index}")
     check(not writers, "zigzag_index is only published by the DSA-CP metadata path", writers)
 
-    # 4. 出口 gather 只有一处（模型边界），runner 不再自己拼
-    runner = src("worker/model_runner_v1.py")
-    check(
-        "zigzag_gather_hidden_states_and_aux" not in runner,
-        "model runner does not gather zigzag hidden states itself (model boundary owns it)",
-    )
-    boundary = src("patch/worker/patch_deepseek_v2.py")
-    check(
-        boundary.count("zigzag_gather_hidden_states_and_aux") >= 1 and "zigzag_active" in boundary,
-        "model boundary performs the zigzag exit gather behind the per-forward flag",
-    )
-
-    # 5. 裸开关只允许出现在 envs.py 与资格判定里
+    # 6. 裸开关只允许出现在 envs.py 与资格判定里
     offenders: list = []
     for path in sorted(pkg.rglob("*.py")):
         text = path.read_text(encoding="utf-8", errors="replace")

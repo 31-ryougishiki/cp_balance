@@ -1,6 +1,6 @@
 # 远端怎么跑精度测试和性能测试
 
-> 当前状态（dp=1 的 DSA-CP 门、zigzag 的 MoE 布局未决、各次审查结论）见 `docs/scripts_review.md`；
+> 当前状态（dp=1 的 DSA-CP 门、各次审查结论）见 `docs/scripts_review.md`；
 > 本文件只讲远端怎么跑。
 
 
@@ -89,22 +89,21 @@ bash tests/run_tests.sh --from accuracy
 ### 2.1 采集（一次起停 = 一组，约 40 分钟/组）
 
 ```bash
-bash tests/run_tests.sh --only perf/p10_capture    # 5 个变体，跑完约 3.5 小时
+bash tests/run_tests.sh --only perf/p10_capture    # 4 个变体（每个约 40 分钟）
 ```
 
-标准一轮跑四组（跳过可选的 `#prof_a2a`）：
+标准一轮跑四组：
 
 ```bash
-bash tests/run_tests.sh --only perf/p10_capture --skip perf/p10_capture#prof_a2a
+bash tests/run_tests.sh --only perf/p10_capture
 ```
 
-| 变体 | 代码树 | CP_BALANCE | reduce_mode | 作用 |
-| --- | --- | --- | --- | --- |
-| `#prof_cp0` | 当前 | 0 | allreduce | 与 base 等价的基准 |
-| `#prof_cp1` | 当前 | 1 | allreduce | zigzag 现状（主对比） |
-| `#prof_cp0_repeat` | 当前 | 0 | allreduce | 噪声地板（同路径重跑一遍） |
-| `#prof_base` | base | 0 | allreduce | 参照树（main + dp=1 门补丁）的 DSA-CP 参照 |
-| `#prof_a2a` | 当前 | 1 | alltoall | 归约 A/B（可选，另加一组机时） |
+| 变体 | 代码树 | CP_BALANCE | 作用 |
+| --- | --- | --- | --- |
+| `#prof_cp0` | 当前 | 0 | 与 base 等价的基准 |
+| `#prof_cp1` | 当前 | 1 | zigzag 现状（主对比） |
+| `#prof_cp0_repeat` | 当前 | 0 | 噪声地板（同路径重跑一遍） |
+| `#prof_base` | base | 0 | 参照树（main + dp=1 门补丁）的 DSA-CP 参照 |
 
 每组按 `lengths`（1024/2048/4096/6144/8192/12288 token）逐档采一个只含 prefill 步的窗口，
 并补跑一次不采样的同请求拿 `clean_s`。
@@ -119,7 +118,7 @@ bash tests/run_tests.sh --only perf/p20_analyse,perf/p21_window_single_step,perf
   `summary.json` 里有 `rank_count > 0` 的窗口；
 - `p21_window_single_step`：判据是每个窗口 `kernel_steps == 1`，但当前 trace 的 `kernel_details.csv` 没有 Step 列，
 `kernel_steps` 恒为 None → **该测试恒 SKIP**（别读成已验证）；
-- `p22_report_compare`：`cp1 vs cp0`、`cp0 vs repeat`、`cp0 vs base` 三张对比表（采过 `#prof_a2a` 时多一张 `cp1 vs a2a`）；
+- `p22_report_compare`：`cp1 vs cp0`、`cp0 vs repeat`、`cp0 vs base` 三张对比表；
 - `p23_report_order`：算子顺序 + device kernel 归因（需要原始 trace，已 prune 就 SKIP）；
 - `p24_collect`：打成 `collect_<时间戳>/*.tgz`（现状只断言"有 tgz"，空包也算 PASS，别当实质校验）。
 

@@ -6,7 +6,7 @@
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 
-pairs="prof_cp0:prof_cp1 prof_cp0:prof_cp0_repeat prof_cp0:prof_base prof_cp1:prof_a2a"
+pairs="prof_cp0:prof_cp1 prof_cp0:prof_cp0_repeat prof_cp0:prof_base"
 any=0
 for pair in $pairs; do
   a=$(hx_role "${pair%%:*}"); b=$(hx_role "${pair##*:}")
@@ -27,5 +27,4 @@ for pair in $pairs; do
 done
 [ "$any" -gt 0 ] || hx_skip "nothing to compare yet"
 hx_note "判读：差值要大于噪声地板（cp0 vs cp0_repeat）"
-hx_note "判读：zigzag 侧 reduce_scatterAicpuKernel 少 N 次、allreduceAicpuKernel 多 N 次（N = 4 x prefill 步数）"
 hx_end

@@ -680,7 +680,7 @@ decode 阶段两边都会拒绝 zigzag：`docs/cp_balance_analysis.md` 第 3 节
 | 2 | Computing / Communication / Overlapped / Free / Bubble | `step_trace_time.csv` | 直接读列 | 是"计算变少"还是"重叠变差" |
 | 3 | 每层 attention / MLP / MoE 时间 | `kernel_details.csv`（按名字里的 layer 序号 + 算子类型筛选）、`operator_details.csv` | 正则分组求和 | zigzag 是否把 attention 的 SFA/LI 时间拉平 |
 | 4 | 每层 attention 在 rank 间的均衡度 | 同 3，按 rank 目录汇总 | `max/mean`、`min/max` | cp_balance 的核心收益指标 |
-| 5 | HCCL 集合通信耗时与次数（all_gather / reduce_scatter / allreduce / alltoall） | `communication.json`、`communication_matrix.json`；或 `op_statistic.csv` / `kernel_details.csv` 里 `hcom_*` | 注：本仓库的 export/ 默认**不**回传 communication*.json（每 rank 上 GB，脚本不解析），看 op_statistic.csv 的 hcom_* 行；真要链路带宽矩阵就从原始 trace 目录里取 | 按 Op 名 + link 求和/计数 | cp_balance 会引入额外通信块交换，要看净收益 |
+| 5 | HCCL 集合通信耗时与次数（all_gather / reduce_scatter / allreduce / alltoall） | `communication.json`、`communication_matrix.json`；或 `op_statistic.csv` / `kernel_details.csv` 里 `hcom_*` | 注：本仓库的 export/ 默认**不**回传 communication*.json（每 rank 上 GB，脚本不解析），看 op_statistic.csv 的 hcom_* 行；真要链路带宽矩阵就从原始 trace 目录里取 | 按 Op 名 + link 求和/计数 | zigzag 只改 attention 内部的选行/放回，集合通信构成应与 cp0 一致 |
 | 6 | 通信带宽 / 单次传输量 / wait 时间 | `communication.json` 的 `Communication Bandwidth Info` | 求和 + Bandwidth(GB/s) | 通信是否退化成小包多次 |
 | 7 | 算子间 gap / 空洞 | `trace_view.json`（4.5a 的 `--gaps`） | 同 stream 排序相减 | 额外通信是否被计算掩盖 |
 | 8 | 算子耗时占比 Top-N 变化 | `op_statistic.csv` | 两次 diff（4.5b） | 哪个算子被引入/消除 |
@@ -697,7 +697,7 @@ decode 阶段两边都会拒绝 zigzag：`docs/cp_balance_analysis.md` 第 3 节
 **步骤 1：直接用仓库里的 `prof_*` 配置（不要派生）**
 
 profiling 的配置已经在 `configs/` 里维护好了：`prof_cur_cp0/cp1`（A3）、`prof_a5_cur_cp0/cp1`（A5）、
-还有 repeat / base / a2a 变体；它们继承 `_profile_base.json`（profiler 段 + `lengths`）与各自的 `_common*.json`。
+还有 repeat / base 变体；它们继承 `_profile_base.json`（profiler 段 + `lengths`）与各自的 `_common*.json`。
 
 - `profiler` 段自动生成 `--profiler-config`，输出目录默认 `<harness>/<配置名>`（不用手写 `torch_profiler_dir`，
   也不用绝对路径）；
@@ -708,7 +708,7 @@ profiling 的配置已经在 `configs/` 里维护好了：`prof_cur_cp0/cp1`（A
 ```bash
 cd <harness>
 bash run.sh prof_a5_cur_cp1 --dry-run --print-env | tail -5    # 确认 argv 里有 --profiler-config
-bash tests/run_tests.sh --only perf/p10_capture --skip perf/p10_capture#prof_a2a
+bash tests/run_tests.sh --only perf/p10_capture
 ```
 
 （下面这段是历史做法，仅作参考——它按旧的 `server_args` list / `repo` 路径 / 手写 `--profiler-config` 写，
