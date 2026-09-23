@@ -49,6 +49,7 @@ hx_resolve() {  # 角色名 -> 配置名；也可以直接写 configs/<名字>.j
 hx_cfg_field()      { $HX_PY field "$1" "$2" 2>/dev/null | tr -d '\r'; }
 hx_fingerprint()    { $HX_PY fingerprint "$1" 2>/dev/null | tr -d '\r'; }
 hx_path()           { $HX_PY path "$1" "$2" 2>/dev/null | tr -d '\r'; }
+hx_profdir()        { $HX_PY profdir "$1" 2>/dev/null | tr -d '\r'; }
 hx_family_configs() { $HX_PY configs "$CP_BALANCE_FAMILY" 2>/dev/null | tr -d '\r'; }
 hx_cur_repo() {
   [ -n "${CP_BALANCE_REPO:-}" ] && { echo "$CP_BALANCE_REPO"; return 0; }

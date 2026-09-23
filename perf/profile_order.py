@@ -224,7 +224,14 @@ def collect_timeline(rank_dir: Path, max_events: int) -> tuple:
             continue
         duration = event.get("dur")
         stamp = event.get("ts")
-        if not isinstance(duration, (int, float)) or not isinstance(stamp, (int, float)):
+        # Some CANN/torch_npu trace versions serialize ts (and occasionally dur)
+        # as JSON strings ("1790092908380061.150") rather than numbers; coerce
+        # instead of rejecting, so the event stream isn't silently emptied
+        # ("trace has no X events at all").
+        try:
+            duration = float(duration)
+            stamp = float(stamp)
+        except (TypeError, ValueError):
             continue
         raw_cat = str(event.get("cat") or "")
         item = cats.setdefault(raw_cat, {"count": 0, "example": "", "names": 0})

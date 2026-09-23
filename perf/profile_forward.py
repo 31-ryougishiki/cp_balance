@@ -33,6 +33,7 @@ import io
 import json
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -230,12 +231,24 @@ def snapshot(prof_dir: str) -> set:
 
 
 def run_config(name: str, args: argparse.Namespace) -> dict:
-    cfg = serve_config.load_config(name)
+    # apply_env_overrides + absolutize mirror serve_config.main(): resolve repo_tree
+    # -> repo path (PYTHONPATH to the right tree), auto-detect local_ip/nic_name, and
+    # absolutize model/profiler paths.  Skipping them leaves repo=None / NIC=auto.
+    cfg = serve_config.apply_env_overrides(serve_config.load_config(name))
+    cfg = serve_config.absolutize(cfg)
     if not (cfg.get("profiler") or {}).get("enabled"):
         raise SystemExit('config %s must set "profiler": {"enabled": true}' % name)
     prof_dir = serve_config.profiler_dir(cfg)
     env = serve_config.build_env(cfg)
     argv = serve_config.build_argv(cfg)
+    # Apply the prelude exactly like serve_config.main(): the prelude (e.g.
+    # "source .../set_env.bash") sets LD_LIBRARY_PATH / ASCEND_CUSTOM_OPP_PATH so
+    # the custom-operator .so (libcust_opapi.so with aclnnAddRmsNormBias etc.) is
+    # loadable.  Without it the worker dies on "not in libopapi.so".  exec keeps
+    # the wrapper pid so the harness can stop the whole process group.
+    prelude = cfg.get("prelude")
+    if prelude:
+        argv = ["bash", "-c", str(prelude) + " && exec " + shlex.join(argv)]
     port = int(cfg["port"])
     fingerprint = serve_config.fingerprint(cfg, env)
     log(fingerprint)
@@ -252,8 +265,11 @@ def run_config(name: str, args: argparse.Namespace) -> dict:
     # 上一轮的 windows.json 必须先删：采集失败时不能让旧产物冒充本轮结果
     (Path(prof_dir) / "windows.json").unlink(missing_ok=True)
     before = snapshot(prof_dir)
-    if not wait_port_free(port):
-        raise SystemExit("port %s is busy before launch (stale service?)" % port)
+    # wait_port_free returns None once the port is free and raises SystemExit
+    # ("port %s still busy") if it stays busy past the deadline; the earlier
+    # `if not wait_port_free(...)` form treated the None return as falsy and so
+    # always raised "busy" before launch.
+    wait_port_free(port)
 
     entries = []
     with open(log_path, "w", encoding="utf-8") as handle:

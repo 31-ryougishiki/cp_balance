@@ -6,7 +6,7 @@
   "nic_name": "auto",
   "devices": "0,1,2,3,4,5,6,7",
   "tp_size": 8,
-  "prelude": "source /mnt/share/l00622059/vendors/custom_transformer/bin/set_env.bash && mkdir -p /tmp/cp_balance_a5_plog",
+  "prelude": "source /mnt/share/z30055003/code/main0921/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/custom_transformer/bin/set_env.bash && mkdir -p /tmp/cp_balance_a5_plog",
   "server_args": {
     "--max-num-seqs": 500
   },
