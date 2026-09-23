@@ -7,8 +7,8 @@
 
 | 仓 | 分支 | tip | 说明 |
 | --- | --- | --- | --- |
-| harness（本仓） | `main` | `a2fc9e6`（本次改动） | 启动/配置/测试脚手架 + 工程文档 |
-| vllm-ascend（被测） | `cp_balance` | `c9f6b455c` | 移植版 + 本地修复 + 2026-09-23 zigzag 修复（§3b/§4.1） |
+| harness（本仓） | `main` | `b4201fb` | 启动/配置/测试脚手架 + 工程文档（含 2026-09-23 的开关清理与文档） |
+| vllm-ascend（被测） | `cp_balance` | `7a2497cdf` | 移植版 + 本地修复 + 2026-09-23 zigzag 修复（§3.5/§4.1），已 push |
 | vllm-ascend-base（参照） | `base-dp1` | `1bf45408f` | = main aff1b74b6 + dp=1 放开门一行；harness 自动对齐到这个分支 |
 | vllm | 固定 commit | `84030bbe3d` | `harness.json trees.vllm`，`required=false` |
 
@@ -46,7 +46,7 @@ bash tests/run_tests.sh --list  # 看全部测试；--only/--tag/--from/--skip �
 3. `99d03e477` 接上 MTP draft 的 `for_draft`：`sfa_v1.build()` -> `_build` -> `_prepare_parallel_metadata` -> `_prepare_zigzag_layout` -> `zigzag_gate_reason`，
    判据 `speculative = draft_index is not None or for_draft`（老线本来就是这样，port 时丢了中间透传）。
 4. `b64c9569b` 边角：PCP builder 同样透传；indexer 侧被门拒绝时补 `[CP_BALANCE][branch] ... site=indexer` 日志（indexer metadata 没有 `dsa_cp_context`，前向兜底回滚不到它）。
-5. `c9f6b455c` + 后续（2026-09-23，**修精度**）zigzag 收进 attention 内部选行：模型主流不再被切成 rank-local 行
+5. `c9f6b455c` + `7a2497cdf`（2026-09-23，**修精度**）zigzag 收进 attention 内部选行：模型主流不再被切成 rank-local 行
    （`_prepare_native_hidden_states` 用本层 `zigzag_index` 选行、`_finalize_o_proj` 用本层 `inv_gather_index` 排回自然序），
    同时删掉模型边界 shard、SP-only 的 owner-independent 归约、`reduce_mode`/`EMBED_LOCAL` 两个开关、
    MoE `mc2_mask` 重排，以及全局 `zigzag_active()`/`_EXTRA_CTX.zigzag_cp_*`（布局唯一来源 = 每层元数据）。
