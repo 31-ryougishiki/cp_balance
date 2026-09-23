@@ -170,21 +170,44 @@ harness 侧同步：删掉 `reduce_mode` 字段/环境变量/指纹字段与 3 �
 `accuracy/check_b_path.py` 的静态门改成按新架构断言（模型主流 zigzag-free、模型级 shard/固定序归约原语不得残留、
 选行与放回都在 DSA-CP attention 内）；`planlog.py`/`run_matrix.py` 删掉已不存在的 reduce 行统计。
 
-## 6. 远端怎么复跑
+## 6. 远端怎么跑（分两阶段，保证一次只动一个变量）
+
+被测树的历史按“是否可能影响 C 的数字”切成三段，两个 ref 各自承担一次远端跑：
+
+| 阶段 | ref / commit | 改了什么 | 会不会影响 C 的数字 | 远端要跑 |
+| --- | --- | --- | --- | --- |
+| S1 唯一变量 | `cp_balance` = `d06883a99` | 只改行布局：模型边界恢复 upstream + attention 内选行/放回（含 per-layer plan 透传）+ 纯测试/文档 | **会** | C 矩阵（阶段 1） |
+| S2 清理 | `cp_balance_stage2` 里的 `2a14d5c91` | 删本部署不可达的失效路径（fixed_order 归约 + `reduce_mode`/`EMBED_LOCAL`、`mc2_mask` 重排、全局 `zigzag_active()`、`forward_zigzag_local`、边界 helper） | 不会 | 不单独跑 |
+| S3 latent | `cp_balance_stage2` 的 tip `f1bb3c915` | `g_proj` 的 gate 行绑定（GLM-5.2 无 `g_proj`，不可达） | 不会 | 不单独跑 |
+
+S2/S3“不会影响”的依据：2026-09-22 那轮 cp1 日志里 `[CP_BALANCE][reduce]` 0 行、mc2 相关 0 行、
+`sequence_parallel_moe`/`mlp_tp`/`g_proj` 0 行；S2 删的代码只在 mlp-tp / SP-only / MC2 / g_proj
+这些配置下才会被安装或触发，本部署一个都不满足。
 
 ```bash
-cd <harness> && git pull
-# 被测树：verify.sh 会把 ../vllm-ascend reset --hard 到 origin/cp_balance，改动必须先 push
-bash tests/run_tests.sh --only smoke/s06_static_fields,smoke/s07_static_b_path   # 本地/远端都能跑，2 秒
-bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix                 # 主判据：40/40
-bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix                 # 顺带确认 B 没被带坏
-bash tests/run_tests.sh --only service/sv22_batch_parity                         # 并发下 cp0/cp1 逐字一致（用 sv20 的产物）
+# 阶段 1（归因）：树上只有“行布局”这一个变量
+cd <harness> && git pull                     # 被测树会被 reset 到 origin/cp_balance = S1
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
+#   PASS → 长 prompt 全错就是“模型级行布局”造成的（另一半改动不在树里）
+#   FAIL → 行布局不是根因，回 docs/scripts_review.md §8 重新取证
+# 注意：阶段 1 先别跑 fast tag —— check_b_path 的 3 条“清理”断言在 S1 按设计不成立
+#       （s06 的字段门与 C 矩阵自身都不受影响）
+
+# 阶段 2（验收 + 证明清理无害）：树切到含全部改动的 tip
+#   默认由我 fast-forward cp_balance → cp_balance_stage2（线性历史，S1 是它的祖先）；
+#   也可以自取：把 harness.json 的 trees.cur.ref 改成 cp_balance_stage2（kind 保持 tip）
+bash tests/run_tests.sh --only smoke/s06_static_fields,smoke/s07_static_b_path   # 两个静态门应 PASS
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix                 # 顺带确认 B 没坏
 ```
+
+阶段 2 的 C 结果应与阶段 1 **逐条一致**（并核对两次日志里的 `[CP_BALANCE][plan]`/`[branch]` 行与
+配置指纹相同）：一致就同时证明了“清理没有引入变化”；若不一致，回归只可能来自 S2/S3 两段各一个提交。
 
 期望：
 
 - `[CP_BALANCE][branch] ... branch=ZIGZAG` 与 `[CP_BALANCE][plan] ... local=<pad/8>` 照旧出现（说明 C 没空跑），
-  但**不再**出现 `[CP_BALANCE][reduce] path=fixed_order`（该原语已删除）；
+  但**不再**出现 `[CP_BALANCE][reduce] path=fixed_order`（S1 里这条路径已不可达，S2 起直接删除）；
 - `c_vs_b` 的 `first-token match: 40/40`（long 20/20）；
 - `max_completion_tokens` 在 pinned vLLM 上可能被忽略，脚本已有 `max_tokens` 兜底。
 
