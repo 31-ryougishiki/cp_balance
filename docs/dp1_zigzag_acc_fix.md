@@ -190,7 +190,7 @@ cd <harness> && git pull                     # 被测树会被 reset 到 origin/
 bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
 #   PASS → 长 prompt 全错就是“模型级行布局”造成的（另一半改动不在树里）
 #   FAIL → 行布局不是根因，回 docs/scripts_review.md §8 重新取证
-# 注意：阶段 1 先别跑 fast tag —— check_b_path 的 3 条“清理”断言在 S1 按设计不成立
+# 注意：阶段 1 只跑这一条。不要跑 verify.sh/--tag fast：check_b_path 的 3 条“清理”断言\n#       在 S1 按设计不成立（S2 删掉那些代码后才成立）；需要冒烟/诊断就用\n#       bash verify.sh --skip-fast（fast 阶段只跑静态门）
 #       （s06 的字段门与 C 矩阵自身都不受影响）
 
 # 阶段 2（验收 + 证明清理无害）：树切到含全部改动的 tip
