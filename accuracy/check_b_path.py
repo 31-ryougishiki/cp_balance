@@ -20,17 +20,19 @@ SWITCH = "VLLM_ASCEND_CP_BALANCE"
 SWITCH_ALLOWED = {"envs.py", "layers/cp_zigzag.py"}
 # 布局的唯一来源：每层的 DSA-CP 元数据（DSACPContext），不允许再有全局开关
 LAYOUT_SOURCES = ("dsa_cp_context", "zigzag_index", "inv_gather_index")
-GLOBAL_FLAGS = ("def zigzag_active()", "_EXTRA_CTX.zigzag_cp_active", "zigzag_cp_context =")
-# 模型主流：zigzag 不得出现在这些文件里（它们是 dp=1 下 element-wise 集合通信的宿主）
+GLOBAL_FLAGS = ("def zigzag_active()", "_EXTRA_CTX.zigzag_cp_active", "_EXTRA_CTX.zigzag_cp_context")
+# 模型主流里必须保持与布局无关的文件（它们是 dp=1 下 element-wise 集合通信的宿主）；
+# 模型边界是有意例外：它按计划只做"进出各一次行序重排"。
 MODEL_STREAM_FILES = (
-    "patch/worker/patch_deepseek_v2.py",
     "ops/vocab_parallel_embedding.py",
     "ops/linear_op.py",
     "ops/fused_moe/shared_experts.py",
     "worker/model_runner_v1.py",
 )
-# 模型级布局用的原语：随"attention 内部选行"的改法一起删除，残留即代表回到了错布局
-DEAD_PRIMITIVES = ("fixed_order_reduce_scatter", "zigzag_shard_tensor", "zigzag_reorder_moe_aux")
+BOUNDARY_FILE = "patch/worker/patch_deepseek_v2.py"
+STREAM_HANDLES = ("zigzag_stream_gather_index", "zigzag_stream_inv_gather_index")
+# 模型级布局用的原语：随"主流按计划序存储"的改法一起删除，残留即代表回到了错布局
+DEAD_PRIMITIVES = ("fixed_order_reduce_scatter", "zigzag_shard_tensor", "zigzag_reorder_moe_aux", "zigzag_gather_tensor")
 ALLOWED_WRITERS = (
     "attention/context_parallel/sfa_cp.py",
     "attention/context_parallel/zigzag_cp.py",
@@ -97,41 +99,42 @@ def main() -> int:
 
     ctx = src("ascend_forward_context.py")
 
-    # 1. 布局只能由元数据决定：不得再有全局 zigzag 开关/上下文代理字段
-    leftover = [name for name in GLOBAL_FLAGS if name in ctx]
-    check(not leftover, "no global zigzag flag survives (the per-layer plan is the layout)", leftover)
+    # 1. 布局只能由元数据决定：旧的全局开关/上下文句柄不得复活
+    leftovers = [name for name in GLOBAL_FLAGS if name in ctx]
+    check(
+        not leftovers,
+        "no global zigzag flag survives (the plan plus the boundary handles are the layout)",
+        leftovers,
+    )
 
-    # 2. zigzag 行布局只属于 DSA-CP attention：模型主流（embedding / 模型边界 / dense
-    #    MLP / MoE / runner）必须保持"全量 replicated"，任何一处置换行序都会破坏
-    #    dp=1 下 element-wise 的 TP/EP 集合通信（B 与 C 逐位一致性）。
+    # 2. 模型主流（embedding / dense MLP / MoE / runner）保持布局无关
     leaks: list = []
     for rel in MODEL_STREAM_FILES:
         for line in zigzag_identifiers(src(rel)):
             leaks.append("%s:%d" % (rel, line))
-    check(not leaks, "the replicated model stream (embedding/boundary/MLP/MoE/runner) is zigzag-free", leaks)
+    check(not leaks, "the replicated model stream (embedding/MLP/MoE/runner) is zigzag-free", leaks)
 
-    # 3. 模型级 shard / owner-independent 归约原语必须彻底消失（它们的替代品是
-    #    attention 内部的 zigzag_index 选行 + 出口 all_gather）
-    dead: list = []
-    for path in sorted(pkg.rglob("*.py")):
-        rel = path.relative_to(pkg).as_posix()
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for name in DEAD_PRIMITIVES:
-            if name in text:
-                dead.append("%s: %s" % (rel, name))
-    check(not dead, "no model-level shard / owner-independent reduce primitive is left", dead)
+    # 3. 边界是唯一的例外：只做两次行序重排，且句柄来自 forward context
+    boundary = src(BOUNDARY_FILE)
+    missing = [name for name in STREAM_HANDLES if name not in boundary]
+    check(not missing, "the model boundary permutes the stream through the published handles", missing)
 
-    # 4. 行布局的进入与离开都在 DSA-CP attention 内，且都取自本层元数据：
-    #    选行用 context.zigzag_index，出口用本层 inv_gather_index
-    sfa = src("attention/context_parallel/sfa_cp.py")
+    # 4. 句柄在 veto 之后发布（veto 掉计划时必须得到 None）
+    veto = ctx.index('_disable_zigzag_metadata_for_fallback(attn_metadata)')
+    publish = ctx.index("_EXTRA_CTX.zigzag_stream_gather_index = getattr(")
+    check(publish > veto, "the stream handles are published after the forward-level veto")
     check(
-        "hidden_states[context.zigzag_index]" in sfa,
-        "DSA-CP attention selects its rank-local zigzag rows itself",
+        all(ctx.count(name) >= 2 for name in STREAM_HANDLES),
+        "the stream handles are declared as extra forward-context attributes and published",
     )
-    check("zigzag_gather_tensor(" in sfa, "DSA-CP attention restores the replicated stream at the o_proj exit")
+
+    # 5. attention 层不再做任何布局搬运：窗口是连续切片，出口是普通 all_gather
+    sfa = src("attention/context_parallel/sfa_cp.py")
+    moved = [token for token in ("hidden_states[context.zigzag_index]", "zigzag_gather_tensor", "zigzag_inv_gather_index") if token in sfa]
+    check(not moved, "the attention layer adds no row-movement of its own", moved)
     check(
-        "zigzag_inv_gather_index=context.inv_gather_index" in sfa,
-        "the zigzag row restore is driven by this layer's own plan, not a global flag",
+        "hidden_states[context.local_start : context.local_end_with_pad]" in sfa,
+        "the attention row window is the plain contiguous slice",
     )
 
     # 5. zigzag 只在 DSA-CP 元数据里落地：别处不得写 zigzag_index

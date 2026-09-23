@@ -179,28 +179,24 @@ harness 侧同步：删掉 `reduce_mode` 字段/环境变量/指纹字段与 3 �
 | S1 唯一变量 | `cp_balance` = `d06883a99` | 只改行布局：模型边界恢复 upstream + attention 内选行/放回（含 per-layer plan 透传）+ 纯测试/文档 | **会** | C 矩阵（阶段 1） |
 | S2 清理 | `cp_balance_stage2` 里的 `2a14d5c91` | 删本部署不可达的失效路径（fixed_order 归约 + `reduce_mode`/`EMBED_LOCAL`、`mc2_mask` 重排、全局 `zigzag_active()`、`forward_zigzag_local`、边界 helper） | 不会 | 不单独跑 |
 | S3 latent | `cp_balance_stage2` 的 tip `f1bb3c915` | `g_proj` 的 gate 行绑定（GLM-5.2 无 `g_proj`，不可达） | 不会 | 不单独跑 |
-| S4 出口搬运融合 | `cp_balance_perf` 的 tip `c3b7d2d8b`（= S1+S2+S3 + 1 个提交） | 把出口反排列融进那一次写入（`index_select(..., out=)`，带 fallback） | 不会（写入的是同一批值） | 可与阶段 2 一起跑；若阶段 2 结果与阶段 1 不同，先回退这一个提交 |
+| S4 出口搬运融合 | `cp_balance_perf` 的 tip `c3b7d2d8b` | 把出口反排列融进那一次写入（`index_select(..., out=)`） | 不会 | **已被 S5 取代**，不必跑（保留作参考） |
+| **S5 主流按计划序**（候选） | `cp_balance_stream` 的 tip `22e980cdf` | 主流按 rank 拼接序存放：attention 入口是连续窗口、出口是普通 all_gather（两者都与 cp0 同一行代码），只有模型边界每次 forward 付两次重排 | **会**（换个行序，是本轮要验的那一个变量） | **阶段 1 就跑它**（唯一一次 C 矩阵） |
 
 S2/S3“不会影响”的依据：2026-09-22 那轮 cp1 日志里 `[CP_BALANCE][reduce]` 0 行、mc2 相关 0 行、
 `sequence_parallel_moe`/`mlp_tp`/`g_proj` 0 行；S2 删的代码只在 mlp-tp / SP-only / MC2 / g_proj
 这些配置下才会被安装或触发，本部署一个都不满足。
 
 ```bash
-# 阶段 1（归因）：树上只有“行布局”这一个变量
-cd <harness> && git pull                     # 被测树会被 reset 到 origin/cp_balance = S1
-bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
-#   PASS → 长 prompt 全错就是“模型级行布局”造成的（另一半改动不在树里）
-#   FAIL → 行布局不是根因，回 docs/scripts_review.md §8 重新取证
-# 注意：阶段 1 只跑这一条。不要跑 verify.sh / --tag fast：check_b_path 的 3 条“清理”断言在 S1 按设计不成立
-#       （S2 删掉那些代码后才成立）；需要冒烟/诊断就用 bash verify.sh --skip-fast
-#       （s06 的字段门与 C 矩阵自身都不受影响）
+# 候选树 = cp_balance_stream（S5：每层零额外算子）。跑之前把它接到 cp_balance 上：
+#   git -C ../vllm-ascend checkout cp_balance_stream      # 或由我把 cp_balance fast-forward 过去
+bash tests/run_tests.sh --only smoke/s06_static_fields,smoke/s07_static_b_path   # 2 秒，两门应 PASS
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix                 # 唯一一次判定
 
-# 阶段 2（验收 + 证明清理无害）：树切到含全部改动的 tip
-#   默认由我 fast-forward cp_balance → cp_balance_stage2（线性历史，S1 是它的祖先）；
-#   也可以自取：把 harness.json 的 trees.cur.ref 改成 cp_balance_stage2（kind 保持 tip）
-bash tests/run_tests.sh --only smoke/s06_static_fields,smoke/s07_static_b_path   # 两个静态门应 PASS
-bash tests/run_tests.sh --only accuracy/a10_matrix_gate#c_matrix
-bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix                 # 顺带确认 B 没坏
+# PASS → 候选成立：attention 每层 0 个额外算子、集合通信与 cp0 一致，可以进性能轮
+# FAIL → 再跑一次 S1（origin/cp_balance，只有“主流保持全量行”这一个变量）做二分：
+#        S1 PASS 且 S5 FAIL  → 是 S5 的“主流换序”或边界的两次重排写错了
+#        S1 也 FAIL          → 行布局修法本身不成立，回 docs/scripts_review.md §8 重新取证
+bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix                 # 想要的更全就顺带跑 B
 ```
 
 阶段 2 的 C 结果应与阶段 1 **逐条一致**（并核对两次日志里的 `[CP_BALANCE][plan]`/`[branch]` 行与
@@ -213,7 +209,34 @@ bash tests/run_tests.sh --only accuracy/a10_matrix_gate#b_matrix                
 - `c_vs_b` 的 `first-token match: 40/40`（long 20/20）；
 - `max_completion_tokens` 在 pinned vLLM 上可能被忽略，脚本已有 `max_tokens` 兜底。
 
-## 6b. 出口搬运优化（S4，分支 `cp_balance_perf`）
+## 6a. 候选形态：主流按计划序（S5，分支 `cp_balance_stream`）
+
+淘汰线是“每层不能多算子”，所以候选不是 S1，而是**把主流换成计划的 rank 拼接序**：主流仍然全量、
+replicated，只是第 s 行放自然位置 `zigzag_gather_index[s]` 的 token，rank r 拥有主流行
+`[r*L, (r+1)*L)`——这正是它自己 plan 的 [prev, next] 顺序。于是：
+
+| 每层（attention） | cp0 | S1（+S4 后） | **S5** |
+| --- | --- | --- | --- |
+| 入口取本 rank 的行 | 视图切片 | 1 个 index_select（T→L gather） | **视图切片（同一行代码）** |
+| 出口写回 | all_gather + 拷贝 | all_gather + index_select(out=) | **all_gather + 拷贝（同一行代码）** |
+| 相对 cp0 的新增算子 | — | 1 个/层（S4 之后） | **0** |
+
+代价全部落在模型边界，每次 forward 两次：embedding 输入 `input_ids[gather_index]`
+（小整数 gather）+ 模型出口 `hidden_states[inv_gather_index]` 还原自然序（T×H，但每 forward
+一次，不是每层一次，比每层版省 78 倍）。因此 runner / 采样 / MTP drafter 一行都不用改；句柄由
+`set_ascend_forward_context` 每次 forward 发布，veto（draft 实例 / V2 runner / dp>1）时随 plan
+一起置 None。
+
+本地已验（真 `build_zigzag_plan`，固化成 `tests/ut/layers/test_cp_zigzag_plan.py`）：
+
+- rank r 的连续窗口 == 它的 `zigzag_index` 行（这是“入口零算子”成立的前提）；
+- 主流拼接序 == 各 rank 行按 rank 拼接，`inv_gather_index` 是它的逆；
+- 边界“进一趟、出一趟”还原自然序（token id 级往返验证）。
+
+注意：hash/vision 路由（`tid2eid` / `bias_vl`）需要 input_ids 的模型，在拼接序主流下也要把
+那份 input_ids 按同一排列重排；GLM-5.2 不走该路径。
+
+## 6b. 出口搬运优化（S4，分支 `cp_balance_perf`，已被 S5 取代）
 
 zigzag 的 o_proj 出口原本是三步：all_gather → `gathered[inv]` 生成新张量 → 拷进 `output`。
 其中后两步只是把同一批值按自然序搬一遍，属于“为了把行序摆回自然序”付的搬运费。S4 把反排列
